@@ -14,6 +14,13 @@ Flask-WTF==1.0.1
 py-sonic
 ffmpeg
 spotdl
+# Pinned: yt-dlp (spotdl's transitive dep) crashes spotdl's Downloader init on this
+# image's python:3.10-slim-bullseye base once it starts treating its Python-3.10
+# deprecation notice as a fatal AudioProviderError (yt-dlp/yt-dlp#16916, announced
+# 2026-06-10) - happens on every container start regardless of SPOTDL_ENABLED, since
+# spotdl's Downloader is constructed unconditionally at startup. Pin predates that
+# change; bump once the base image moves off Python 3.10.
+yt-dlp==2026.3.17
 sqlalchemy==2.0.7
 pyarr
 expiringdict==1.2.2
