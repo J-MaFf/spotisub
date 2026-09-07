@@ -41,13 +41,24 @@ def create_sp_client():
     cache_path = os.path.abspath(os.curdir) + '/cache/spotipy_cache'
     
     try:
+        # requests_timeout defaults to None (no timeout) on SpotifyOAuth --
+        # unlike spotipy.Spotify below, which defaults to 5s. Since the
+        # Spotify client above calls back into this OAuth object to
+        # transparently refresh the access token roughly hourly, a network
+        # hiccup during one of those refreshes hangs the whole client
+        # forever instead of raising. Confirmed live: a reimport-all run
+        # died silently mid-way with no error logged, stuck for hours;
+        # /proc/<pid>/net/tcp showed sockets in CLOSE_WAIT (remote closed,
+        # local side never noticed). Pin an explicit timeout so a stalled
+        # refresh fails fast and can be retried instead of hanging.
         creds = SpotifyOAuth(
             scope=scope,
             client_id=secrets["client_id"],
             client_secret=secrets["client_secret"],
             redirect_uri=secrets["redirect_uri"],
             open_browser=False,
-            cache_path=cache_path)
+            cache_path=cache_path,
+            requests_timeout=10)
 
         return spotipy.Spotify(auth_manager=creds)
     except EOFError as e:
