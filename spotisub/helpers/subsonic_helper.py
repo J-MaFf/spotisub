@@ -177,7 +177,17 @@ def build_subsonic_cache() -> SubsonicCache:
                 # done searching
                 break
 
-            num_retrieved_songs = len(subsonic_search["searchResult2"]["song"])
+            songs_page = subsonic_search["searchResult2"]["song"]
+            # Subsonic-API implementations (Navidrome included) return a
+            # single dict instead of a one-item list when a page has exactly
+            # one song -- normalize before counting/iterating, otherwise
+            # this silently drops that song from the cache (iterating a
+            # dict yields its string keys, not the song itself, so the
+            # "musicBrainzId" in song check below never matches).
+            if isinstance(songs_page, dict):
+                songs_page = [songs_page]
+
+            num_retrieved_songs = len(songs_page)
 
             if num_retrieved_songs == 0:
                 # done searching, though this shouldn't get here
@@ -188,7 +198,7 @@ def build_subsonic_cache() -> SubsonicCache:
             if num_retrieved_songs < SONG_COUNT:
                 total_song_count = song_offset
 
-            for song in subsonic_search["searchResult2"]["song"]:
+            for song in songs_page:
                 if "musicBrainzId" in song:
                     subsonic_songs_dict[song["musicBrainzId"]] = song
     except Exception:
@@ -273,7 +283,12 @@ def get_subsonic_search_results(text_to_search):
         if ("searchResult2" in subsonic_search
             and len(subsonic_search["searchResult2"]) > 0
                 and "song" in subsonic_search["searchResult2"]):
-            for song in subsonic_search["searchResult2"]["song"]:
+            songs_page = subsonic_search["searchResult2"]["song"]
+            # See build_subsonic_cache() above: a single-song result page
+            # comes back as a bare dict, not a one-item list.
+            if isinstance(songs_page, dict):
+                songs_page = [songs_page]
+            for song in songs_page:
                 if "id" in song and song["id"] not in result:
                     result[song["id"]] = song
     return result
@@ -288,7 +303,13 @@ def get_playlist_id_by_name(playlist_name):
         single_playlist_search = playlists_search["playlists"]
         if "playlist" in single_playlist_search and len(
                 single_playlist_search["playlist"]) > 0:
-            for playlist in single_playlist_search["playlist"]:
+            playlists_page = single_playlist_search["playlist"]
+            # See build_subsonic_cache() above: if the account has exactly
+            # one playlist, this comes back as a bare dict, not a one-item
+            # list.
+            if isinstance(playlists_page, dict):
+                playlists_page = [playlists_page]
+            for playlist in playlists_page:
                 if playlist["name"].strip() == playlist_name.strip():
                     playlist_id = playlist["id"]
                     break
@@ -776,10 +797,16 @@ def get_playlist_songs_ids_by_id(key):
         database.delete_playlist_relation_by_id(key)
     elif (playlist_search is not None
             and "playlist" in playlist_search
-            and "entry" in playlist_search["playlist"]
-            and len(playlist_search["playlist"]["entry"]) > 0):
-        songs = playlist_search["playlist"]["entry"]
-        for entry in playlist_search["playlist"]["entry"]:
+            and "entry" in playlist_search["playlist"]):
+        entries = playlist_search["playlist"]["entry"]
+        # Subsonic-API implementations (Navidrome included) return a single
+        # dict instead of a one-item list when a playlist has exactly one
+        # entry. Iterating a dict directly yields its string keys, not the
+        # entry itself, which crashed downstream with "string indices must
+        # be integers" -- normalize to a list first.
+        if isinstance(entries, dict):
+            entries = [entries]
+        for entry in entries:
             if "id" in entry and entry["id"] is not None and entry["id"].strip(
             ) != "":
                 if not is_ignored(
