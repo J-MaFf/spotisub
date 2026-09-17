@@ -607,6 +607,35 @@ def delete_playlist_relation_by_id(playlist_id: str):
         conn.close()
 
 
+def delete_playlist_info_by_uuid(uuid):
+    """delete a playlist_info row and its subsonic_spotify_relation rows,
+    keyed by playlist_info.uuid.
+
+    Unlike delete_playlist_relation_by_id(), which is keyed by
+    subsonic_playlist_id and is a silent no-op for a row whose
+    subsonic_playlist_id is NULL (SQL NULL == NULL never matches), this
+    works whether subsonic_playlist_id is NULL or set.
+
+    Returns the deleted playlist_info row (so the caller can check whether
+    a Subsonic-side deletePlaylist() call is also needed), or None if no row
+    with this uuid existed.
+    """
+    with dbms.db_engine.connect() as conn:
+        pl_info = select_playlist_info_by_uuid_with_conn(conn, uuid)
+        if pl_info is not None:
+            stmt1 = delete(dbms.subsonic_spotify_relation).where(
+                dbms.subsonic_spotify_relation.c.playlist_info_uuid == pl_info.uuid)
+            stmt1.compile()
+            stmt2 = delete(dbms.playlist_info).where(
+                dbms.playlist_info.c.uuid == pl_info.uuid)
+            stmt2.compile()
+            conn.execute(stmt1)
+            conn.execute(stmt2)
+            conn.commit()
+        conn.close()
+    return pl_info
+
+
 def delete_song_relation(playlist_id: str, subsonic_track):
     """delete playlist from database"""
 
