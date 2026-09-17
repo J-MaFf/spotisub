@@ -2,7 +2,7 @@
 import os
 
 
-SPLIT_TOKENS = ["(", "-", "feat"]
+SPLIT_TOKENS = ["(", "[", "-", "feat"]
 
 
 # Configuration constants

@@ -187,3 +187,61 @@ def test_disambiguation_falls_back_to_a_match_without_album_info():
 
     assert matched is not None
     assert matched["id"] in ("song-a", "song-b")
+
+
+# ---------------------------------------------------------------------------
+# C-final regression: the exact-dict-key candidate index must not lose
+# matches the old full linear-scan compare_strings()/compare() supported --
+# specifically, a Subsonic-side title carrying a bracketed/parenthetical
+# qualifier suffix (e.g. "[Live]", "(Remaster)") that the Spotify-side title
+# doesn't have. compare_strings() does substring matching, so the old linear
+# scan found these; the indexed candidate lookup only works if
+# generate_compare_array() produces a shared key for both sides (see
+# constants.SPLIT_TOKENS), so this proves that still holds for both bracket
+# styles.
+# ---------------------------------------------------------------------------
+
+def test_bracket_qualifier_suffix_still_resolves_via_index():
+    subsonic_song = make_subsonic_song(
+        "s-live", "Come As You Are [Live]", "Nirvana", "Live at the Paramount")
+    cache = build_cache_for_songs([subsonic_song])
+
+    track = make_spotify_track("Come As You Are", "Nirvana", album_name="Nevermind")
+    helper = comparison_helper_for(track)
+
+    matched = subsonic_helper.get_subsonic_track_via_string_compare(
+        helper, cache.song_compare_dict)
+
+    assert matched is not None
+    assert matched["id"] == "s-live"
+
+
+def test_parenthetical_qualifier_suffix_still_resolves_via_index():
+    subsonic_song = make_subsonic_song(
+        "s-remaster", "Come As You Are (Remaster)", "Nirvana", "Nevermind (Remastered)")
+    cache = build_cache_for_songs([subsonic_song])
+
+    track = make_spotify_track("Come As You Are", "Nirvana", album_name="Nevermind")
+    helper = comparison_helper_for(track)
+
+    matched = subsonic_helper.get_subsonic_track_via_string_compare(
+        helper, cache.song_compare_dict)
+
+    assert matched is not None
+    assert matched["id"] == "s-remaster"
+
+
+def test_bracket_qualifier_suffix_resolves_end_to_end_via_match_with_subsonic_track(monkeypatch):
+    subsonic_songs = [
+        make_subsonic_song(
+            "s-live", "Come As You Are [Live]", "Nirvana", "Live at the Paramount")]
+    # No ISRC -> MBID matching is skipped, exercising the string-compare
+    # fallback path exactly as write_playlist() would for a track with no
+    # usable ISRC/MBID.
+    track = make_spotify_track(
+        "Come As You Are", "Nirvana", album_name="Nevermind")
+
+    result, fake_client = _run_match(monkeypatch, track, subsonic_songs)
+
+    assert result.found is True
+    assert "s-live" in result.song_ids
