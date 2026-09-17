@@ -45,3 +45,9 @@ class User(configuration_db.Model, UserMixin):
 class SubsonicCache(NamedTuple):
     total_song_count: int
     song_mbid_dict: dict[str, object]
+    # Index used by the string-compare fallback matcher: keyed by each
+    # song's normalized title compare-variant (see utils.generate_compare_array),
+    # mapping to the list of Subsonic song dicts sharing that variant. Lets
+    # get_subsonic_track_via_string_compare() look up a small candidate set
+    # instead of scanning every song in the library for every track.
+    song_compare_dict: dict[str, list]

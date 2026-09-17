@@ -637,10 +637,15 @@ def insert_playlist_relation(
         spotify_song_uuid,
         pl_info_uuid):
     """insert playlist into database"""
+    # Match the existing row by (spotify_song_uuid, playlist_info_uuid) only
+    # -- NOT by subsonic_song_id/subsonic_artist_id. Matching on the match
+    # *outcome* meant a track that stopped matching on a later run (real
+    # subsonic_song_id -> None) could never find its own prior row (whose
+    # subsonic_song_id is still the old real value), so it always inserted a
+    # second row instead of updating the first. See
+    # specs/reliable-track-matching.md R4.
     old_relation = select_playlist_relation(
         conn,
-        subsonic_song_id,
-        subsonic_artist_id,
         spotify_song_uuid,
         pl_info_uuid)
     if old_relation is None:
@@ -655,15 +660,12 @@ def insert_playlist_relation(
         conn.execute(stmt)
         return select_playlist_relation(
             conn,
-            subsonic_song_id,
-            subsonic_artist_id,
             spotify_song_uuid,
             pl_info_uuid)
     else:
         stmt = update(
             dbms.subsonic_spotify_relation).where(
-            dbms.subsonic_spotify_relation.c.uuid == old_relation.uuid,
-            dbms.subsonic_spotify_relation.c.playlist_info_uuid == pl_info_uuid).values(
+            dbms.subsonic_spotify_relation.c.uuid == old_relation.uuid).values(
             subsonic_song_id=subsonic_song_id,
             subsonic_artist_id=subsonic_artist_id,
             spotify_song_uuid=spotify_song_uuid)
@@ -729,20 +731,25 @@ def select_playlist_info_by_subsonic_id(subsonic_playlist_uuid):
 
 def select_playlist_relation(
         conn,
-        subsonic_song_id,
-        subsonic_artist_id,
         spotify_song_uuid,
         pl_info_uuid):
+    """select playlist relation
+
+    Matches by (spotify_song_uuid, playlist_info_uuid) only. This is
+    intentionally NOT keyed by subsonic_song_id/subsonic_artist_id -- those
+    are the *outcome* of a match, and a row must be found regardless of
+    whether the outcome changed between runs (a previously-matched track
+    that stops matching, or vice versa, is still "the same" playlist/song
+    pair and must update the existing row instead of creating a new one).
+    See specs/reliable-track-matching.md R4.
+    """
     value = None
-    """select playlist relation"""
     stmt = select(
         dbms.subsonic_spotify_relation.c.uuid,
         dbms.subsonic_spotify_relation.c.subsonic_song_id,
         dbms.subsonic_spotify_relation.c.subsonic_artist_id,
         dbms.subsonic_spotify_relation.c.spotify_song_uuid,
         dbms.subsonic_spotify_relation.c.ignored).where(
-        dbms.subsonic_spotify_relation.c.subsonic_song_id == subsonic_song_id,
-        dbms.subsonic_spotify_relation.c.subsonic_artist_id == subsonic_artist_id,
         dbms.subsonic_spotify_relation.c.playlist_info_uuid == pl_info_uuid,
         dbms.subsonic_spotify_relation.c.spotify_song_uuid == spotify_song_uuid)
     stmt.compile()
@@ -777,6 +784,101 @@ def select_playlist_relation_by_uuid(uuid):
         cursor.close()
 
     return value
+
+
+def find_duplicate_playlist_relation_groups(conn=None):
+    """One-time-repair helper (see specs/reliable-track-matching.md R6).
+
+    Returns {(playlist_info_uuid, spotify_song_uuid): [row, ...]} for every
+    pair that has more than one row in subsonic_spotify_relation -- the
+    duplicate rows the old insert_playlist_relation()/select_playlist_relation()
+    keying bug (fixed in R4) accumulated on installations that reimported the
+    same playlist more than once before this fix. Each row includes its
+    SQLite `rowid`, used elsewhere to approximate insertion recency (this
+    table has no timestamp column and rowid is monotonically increasing for
+    ordinary inserts on SQLite's default rowid tables).
+    """
+    close_conn = conn is None
+    if conn is None:
+        conn = dbms.db_engine.connect()
+    try:
+        rows = conn.execute(text(
+            "SELECT rowid, uuid, subsonic_song_id, subsonic_artist_id, "
+            "spotify_song_uuid, playlist_info_uuid, ignored "
+            "FROM " + SUBSONIC_SPOTIFY_RELATION + " "
+            "ORDER BY playlist_info_uuid, spotify_song_uuid, rowid"
+        )).fetchall()
+    finally:
+        if close_conn:
+            conn.close()
+
+    groups = {}
+    for row in rows:
+        key = (row.playlist_info_uuid, row.spotify_song_uuid)
+        groups.setdefault(key, []).append(row)
+
+    return {key: group_rows for key,
+            group_rows in groups.items() if len(group_rows) > 1}
+
+
+def plan_duplicate_playlist_relation_repair(live_song_ids_by_playlist=None):
+    """Decide, for every duplicate (playlist_info_uuid, spotify_song_uuid)
+    pair, which row to keep and which to delete (see
+    specs/reliable-track-matching.md R6). Returns a list of dicts:
+    {"playlist_info_uuid", "spotify_song_uuid", "keep_uuid", "delete_uuids"}.
+
+    live_song_ids_by_playlist, if given, maps playlist_info_uuid -> a set of
+    subsonic_song_ids currently actually present in that playlist's live
+    Subsonic playlist. When available, the row whose subsonic_song_id is
+    confirmed live is kept. Otherwise (or if none of a group's rows have a
+    currently-live subsonic_song_id) the most-recently-inserted row (highest
+    rowid) is kept. This never applies anything to the database -- see
+    repair_duplicate_playlist_relations() for that, and its dry_run flag.
+    """
+    groups = find_duplicate_playlist_relation_groups()
+    plan = []
+    for (playlist_info_uuid, spotify_song_uuid), rows in groups.items():
+        keep = None
+        if live_song_ids_by_playlist is not None:
+            live_ids = live_song_ids_by_playlist.get(playlist_info_uuid, set())
+            for row in rows:
+                if row.subsonic_song_id is not None and row.subsonic_song_id in live_ids:
+                    keep = row
+                    break
+        if keep is None:
+            keep = max(rows, key=lambda r: r.rowid)
+
+        plan.append({
+            "playlist_info_uuid": playlist_info_uuid,
+            "spotify_song_uuid": spotify_song_uuid,
+            "keep_uuid": keep.uuid,
+            "delete_uuids": [r.uuid for r in rows if r.uuid != keep.uuid],
+        })
+
+    return plan
+
+
+def repair_duplicate_playlist_relations(
+        live_song_ids_by_playlist=None, dry_run=True):
+    """Apply (or, when dry_run, just report) the one-time de-duplication of
+    subsonic_spotify_relation rows described in
+    specs/reliable-track-matching.md R6. Returns the repair plan produced by
+    plan_duplicate_playlist_relation_repair() either way, so a caller can
+    print a report before deciding to re-run with dry_run=False.
+    """
+    plan = plan_duplicate_playlist_relation_repair(live_song_ids_by_playlist)
+    if not dry_run:
+        all_delete_uuids = [
+            u for item in plan for u in item["delete_uuids"]]
+        if len(all_delete_uuids) > 0:
+            with dbms.db_engine.connect() as conn:
+                stmt = delete(dbms.subsonic_spotify_relation).where(
+                    dbms.subsonic_spotify_relation.c.uuid.in_(all_delete_uuids))
+                stmt.compile()
+                conn.execute(stmt)
+                conn.commit()
+                conn.close()
+    return plan
 
 
 def select_all_songs(
