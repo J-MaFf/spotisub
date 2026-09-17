@@ -64,8 +64,34 @@ def load_subsonic_cache_from_file() -> SubsonicCache:
         if os.stat(path).st_size == 0:
             os.remove(path)
         else:
-            with open(path, 'rb') as f:
-                cache = pickle.load(f)
+            try:
+                with open(path, 'rb') as f:
+                    loaded = pickle.load(f)
+                if not isinstance(loaded, SubsonicCache):
+                    raise TypeError(
+                        f"cached object is a {type(loaded).__name__}, "
+                        f"not a SubsonicCache")
+                cache = loaded
+            except Exception:
+                # Covers both a stale pre-migration pickle (older
+                # SubsonicCache NamedTuple shapes -- e.g. the 2-field
+                # version from before song_compare_dict was added --
+                # unpickle to a TypeError: SubsonicCache.__new__() missing
+                # a required positional argument, since pickle rebuilds a
+                # NamedTuple by calling the *current* class's __new__ with
+                # the *old* number of stored fields) and any other
+                # unreadable/corrupt cache file. Treat exactly like "no
+                # cache file exists yet": log it clearly for production
+                # diagnosability and fall through to a full rebuild, which
+                # populates all current fields correctly and overwrites
+                # the stale pickle on disk.
+                logging.warning(
+                    "Stale or incompatible subsonic cache file found at "
+                    f"'{path}' (likely from a SubsonicCache shape used by "
+                    "an older version of this app); rebuilding subsonic "
+                    "cache from scratch.",
+                    exc_info=True)
+                cache = build_subsonic_cache()
     return cache
 
 
@@ -88,7 +114,13 @@ def load_spotify_cache_from_file():
 # caches
 playlist_cache = ExpiringDict(max_len=500, max_age_seconds=300)
 spotify_cache = None
-subsonic_cache = load_subsonic_cache_from_file()
+# subsonic_cache is initialized further down (after build_subsonic_cache()
+# and check_pysonic_connection() are defined): load_subsonic_cache_from_file()
+# falls through to build_subsonic_cache() when it finds a stale/incompatible
+# on-disk cache, and that name must already exist in this module's globals
+# by the time this call can actually execute that path -- see the comment
+# there.
+subsonic_cache = None
 
 
 def save_cache_object_to_file(obj, filename: str):
@@ -255,6 +287,14 @@ def check_pysonic_connection():
                 "Subsonic connection failed after retry: %s", str(retry_error))
 
     raise SubsonicOfflineException()
+
+
+# Deferred until here (rather than immediately after load_subsonic_cache_from_file
+# is defined, above) because that loader can fall through to build_subsonic_cache()
+# -- which itself calls check_pysonic_connection() -- when it finds a stale or
+# incompatible on-disk cache; both names must already be bound in this module's
+# globals before this call can execute that path.
+subsonic_cache = load_subsonic_cache_from_file()
 
 
 def get_artists_array_names():
