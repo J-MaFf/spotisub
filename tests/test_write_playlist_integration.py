@@ -5,7 +5,7 @@ subsonic_spotify_relation must contain exactly one row per
 (playlist_info_uuid, spotify_song_uuid) pair -- not a growing pile of
 duplicates (the bug fixed by R4).
 
-See specs/reliable-track-matching.md.
+See specs/archive/reliable-track-matching.md.
 """
 from spotisub import database
 from spotisub.helpers import subsonic_helper

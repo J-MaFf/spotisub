@@ -1,5 +1,13 @@
 # Spec: Reliable Subsonic track matching (fallback matching + stable persisted state)
 
+> **Completed 2026-09-16.** Built via #4 (core fix), #5 (Dockerfile fix), and #6 (repair
+> script safety fix, after live deployment verification caught a second instance of the
+> app-import-triggers-a-second-scheduler incident class). Live-verified against production:
+> the "Rock" playlist went from 1 matched track to 361 on reimport after deploy, the app
+> restarted cleanly against the pre-existing (pre-migration-format) cache file, and the
+> one-time duplicate-relation repair ran cleanly, deleting 1,234 duplicate rows across 1,206
+> pairs with no scheduler side effect. All acceptance criteria (C1-C8, C-final) confirmed.
+
 ## Goal
 Make Spotisub's Spotify→Subsonic track matching (a) actually use its existing text-based
 fallback when MBID matching fails, and (b) keep its own persisted "is this track matched"

@@ -1,7 +1,7 @@
 """Tests for the Subsonic string-compare fallback matcher and the removal of
 the TEXT_COMAPRE_MATCHING_ENABLED toggle.
 
-Covers specs/reliable-track-matching.md R1, R2, R3, R7, R8.
+Covers specs/archive/reliable-track-matching.md R1, R2, R3, R7, R8.
 """
 import subprocess
 from pathlib import Path

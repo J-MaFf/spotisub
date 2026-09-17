@@ -643,7 +643,7 @@ def insert_playlist_relation(
     # subsonic_song_id -> None) could never find its own prior row (whose
     # subsonic_song_id is still the old real value), so it always inserted a
     # second row instead of updating the first. See
-    # specs/reliable-track-matching.md R4.
+    # specs/archive/reliable-track-matching.md R4.
     old_relation = select_playlist_relation(
         conn,
         spotify_song_uuid,
@@ -741,7 +741,7 @@ def select_playlist_relation(
     whether the outcome changed between runs (a previously-matched track
     that stops matching, or vice versa, is still "the same" playlist/song
     pair and must update the existing row instead of creating a new one).
-    See specs/reliable-track-matching.md R4.
+    See specs/archive/reliable-track-matching.md R4.
     """
     value = None
     stmt = select(
@@ -787,7 +787,7 @@ def select_playlist_relation_by_uuid(uuid):
 
 
 def find_duplicate_playlist_relation_groups(conn=None):
-    """One-time-repair helper (see specs/reliable-track-matching.md R6).
+    """One-time-repair helper (see specs/archive/reliable-track-matching.md R6).
 
     Returns {(playlist_info_uuid, spotify_song_uuid): [row, ...]} for every
     pair that has more than one row in subsonic_spotify_relation -- the
@@ -824,7 +824,7 @@ def find_duplicate_playlist_relation_groups(conn=None):
 def plan_duplicate_playlist_relation_repair(live_song_ids_by_playlist=None):
     """Decide, for every duplicate (playlist_info_uuid, spotify_song_uuid)
     pair, which row to keep and which to delete (see
-    specs/reliable-track-matching.md R6). Returns a list of dicts:
+    specs/archive/reliable-track-matching.md R6). Returns a list of dicts:
     {"playlist_info_uuid", "spotify_song_uuid", "keep_uuid", "delete_uuids"}.
 
     live_song_ids_by_playlist, if given, maps playlist_info_uuid -> a set of
@@ -862,7 +862,7 @@ def repair_duplicate_playlist_relations(
         live_song_ids_by_playlist=None, dry_run=True):
     """Apply (or, when dry_run, just report) the one-time de-duplication of
     subsonic_spotify_relation rows described in
-    specs/reliable-track-matching.md R6. Returns the repair plan produced by
+    specs/archive/reliable-track-matching.md R6. Returns the repair plan produced by
     plan_duplicate_playlist_relation_repair() either way, so a caller can
     print a report before deciding to re-run with dry_run=False.
     """

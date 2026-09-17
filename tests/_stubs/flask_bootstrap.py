@@ -1,7 +1,7 @@
 """Test-only stand-in for the (unmaintained, Flask-2.2-era) Flask-Bootstrap
 package. spotisub/__init__.py imports and instantiates this unconditionally
 at module import time purely to wire up template helpers this test suite
-never renders; nothing in specs/reliable-track-matching.md touches it. See
+never renders; nothing in specs/archive/reliable-track-matching.md touches it. See
 tests/conftest.py for how this directory gets onto sys.path.
 """
 

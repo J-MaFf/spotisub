@@ -1,12 +1,12 @@
 """Performance regression test for the string-compare fallback matcher.
 
-Covers specs/reliable-track-matching.md R3 / C3.
+Covers specs/archive/reliable-track-matching.md R3 / C3.
 
 C3 requires evidence that fallback matching (get_subsonic_track_via_string_compare,
 via the get_subsonic_track_via_mbid()-misses-then-falls-back-to-string-compare
 path in match_with_subsonic_track()) is not an O(track_count * cache_size) scan.
 This builds a synthetic Subsonic cache of ~15,000 songs (the live deployment's
-approximate library size, see specs/reliable-track-matching.md Context) and a
+approximate library size, see specs/archive/reliable-track-matching.md Context) and a
 synthetic playlist of 564 tracks (the live "Rock" playlist's reported size) with
 no ISRC, so every track is forced through the string-compare fallback -- no
 MBID matching, no network I/O.
