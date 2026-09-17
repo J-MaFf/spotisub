@@ -288,6 +288,51 @@ def test_r5_insert_spotify_song_missing_album_still_rolls_back_now_with_warning(
     assert "No Album Track" in caplog.text
 
 
+def test_r5_insert_spotify_song_empty_album_dict_does_not_raise(caplog):
+    """Round-2 regression: a track whose "album" key is present but holds
+    an empty dict ({}) -- e.g. a local-file track Spotify reports with
+    incomplete album metadata -- must not crash insert_spotify_album()
+    with KeyError('uri'). It should be logged and left unpersisted, same
+    outcome as the missing-"album"-key case above."""
+    track_spotify = {
+        "name": "Empty Album Dict Track",
+        "uri": "spotify:local:someone:somealbum:empty-album-dict-track:200",
+        "album": {}}
+    artist_spotify = {"name": "Some Artist", "uri": "spotify:artist:y"}
+
+    caplog.set_level(logging.WARNING)
+    with database.dbms.db_engine.connect() as conn:
+        result = database.insert_spotify_song(
+            conn, artist_spotify, track_spotify)
+        conn.close()
+
+    assert result is not None
+    assert result["song_uuid"] is None
+    assert "Empty Album Dict Track" in caplog.text
+
+
+def test_r5_insert_spotify_song_album_missing_name_does_not_raise(caplog):
+    """Round-2 regression: a track whose "album" dict is present and has a
+    "uri" but no "name" key must not crash insert_spotify_album() with
+    KeyError('name'). It should be logged and left unpersisted, same
+    outcome as the missing-"album"-key case above."""
+    track_spotify = {
+        "name": "Album Missing Name Track",
+        "uri": "spotify:local:someone:somealbum:album-missing-name:200",
+        "album": {"uri": "spotify:album:no-name"}}
+    artist_spotify = {"name": "Some Artist", "uri": "spotify:artist:y"}
+
+    caplog.set_level(logging.WARNING)
+    with database.dbms.db_engine.connect() as conn:
+        result = database.insert_spotify_song(
+            conn, artist_spotify, track_spotify)
+        conn.close()
+
+    assert result is not None
+    assert result["song_uuid"] is None
+    assert "Album Missing Name Track" in caplog.text
+
+
 def test_r5_insert_song_handles_missing_uri_gracefully_without_crashing():
     """The insert_song() caller must not itself crash now that
     insert_spotify_song() can return None (rather than a dict) -- confirms

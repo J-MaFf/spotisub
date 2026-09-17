@@ -1139,15 +1139,19 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
     if song_db is None:
         album = None
         if "album" in track_spotify:
+            # insert_spotify_album() itself logs and returns None for a
+            # malformed/empty album dict (missing "uri" and/or "name"),
+            # so no extra try/except is needed here.
             album = insert_spotify_album(conn, track_spotify["album"])
-        else:
-            # Unchanged behavior: no album means this track is never
-            # persisted (album stays None below, so the insert never runs
-            # and the caller, insert_song(), rolls back and returns None)
-            # -- now with a warning so this silent skip is diagnosable.
+        if album is None:
+            # Unchanged behavior: no usable album (missing "album" key,
+            # or an "album" dict that is empty/malformed) means this
+            # track is never persisted (the insert below never runs and
+            # the caller, insert_song(), rolls back and returns None) --
+            # now with a warning so this silent skip is diagnosable.
             logging.warning(
-                'insert_spotify_song: track "%s" has no album, will not '
-                'be persisted.',
+                'insert_spotify_song: track "%s" has no usable album, '
+                'will not be persisted.',
                 track_spotify.get("name"))
         if album is not None:
             return_dict["album_ignored"] = (album.ignored == 1)
@@ -1232,16 +1236,32 @@ def insert_spotify_artist(conn, artist_spotify):
 
 def insert_spotify_album(conn, album_spotify):
     """insert spotify artist"""
-    album = select_spotify_album_by_uri(conn, album_spotify["uri"])
+    # album_spotify can be an empty dict ({}) or a dict missing "name"
+    # and/or "uri" -- e.g. a local-file track's album metadata, which
+    # Spotify may report incompletely (see
+    # specs/local-file-track-matching.md's Context/Out-of-scope section).
+    # Guard both fields with .get() so a malformed album dict is skipped
+    # cleanly (logged, no row inserted) instead of raising KeyError. Per
+    # that spec, we do not invent placeholder name/uri values to force an
+    # insert.
+    uri = album_spotify.get("uri")
+    name = album_spotify.get("name")
+    if not uri or not name:
+        logging.warning(
+            'insert_spotify_album: malformed/empty album %s, skipping.',
+            album_spotify)
+        return None
+
+    album = select_spotify_album_by_uri(conn, uri)
     if album is None:
         stmt = insert(
             dbms.spotify_album).values(
             uuid=str(uuid.uuid4().hex),
-            name=album_spotify["name"],
-            spotify_uri=album_spotify["uri"])
+            name=name,
+            spotify_uri=uri)
         stmt.compile()
         conn.execute(stmt)
-        return select_spotify_album_by_uri(conn, album_spotify["uri"])
+        return select_spotify_album_by_uri(conn, uri)
     return album
 
 
