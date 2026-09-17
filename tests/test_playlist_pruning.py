@@ -210,6 +210,39 @@ def test_prune_stale_user_playlists_three_row_scenario(monkeypatch, caplog):
     assert "Present Playlist" not in caplog.text
 
 
+def test_prune_stale_user_playlists_ignores_stale_null_subsonic_id(monkeypatch):
+    """Regression test for the exact bug found live: insert_playlist_type()'s
+    update branch (used by every daily discovery scan for an already-known
+    playlist) always writes subsonic_playlist_id=None, so a playlist_info
+    row's stored subsonic_playlist_id can be NULL even though a real,
+    populated Navidrome playlist for it still exists (it just hasn't been
+    reimported since the last scan_library run). Pruning must not trust that
+    stale NULL and skip the Subsonic-side delete -- it must look the live
+    playlist up by name instead, the same way write_playlist() already does.
+    """
+    fake_client = FakePysonicClient()
+    monkeypatch.setattr(
+        subsonic_helper, "check_pysonic_connection", lambda: fake_client)
+
+    # A real Subsonic/Navidrome playlist exists under the prefixed name...
+    fake_client.createPlaylist(
+        name="Spotisub - Stale Id Playlist", songIds=["song-x"])
+    (real_subsonic_id,) = fake_client.playlists.keys()
+
+    # ...but the playlist_info row's stored subsonic_playlist_id is NULL,
+    # exactly as insert_playlist_type()'s update branch leaves it after any
+    # scan_library run.
+    stale_row = _seed_playlist("Stale Id Playlist", subsonic_playlist_id=None)
+    assert stale_row.subsonic_playlist_id is None
+
+    subsonic_helper.prune_stale_user_playlists(set())
+
+    assert database.select_playlist_info_by_uuid(stale_row.uuid) is None
+    assert real_subsonic_id not in fake_client.playlists, (
+        "the live Subsonic playlist must be found and deleted by name, "
+        "not skipped because the stored subsonic_playlist_id was NULL")
+
+
 def test_prune_stale_user_playlists_ignored_absent_row_is_pruned(monkeypatch):
     fake_client = FakePysonicClient()
     monkeypatch.setattr(
