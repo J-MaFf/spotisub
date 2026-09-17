@@ -1137,12 +1137,22 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
     song_db = select_spotify_song_by_uri(conn, uri)
     song_uuid = None
     if song_db is None:
-        album = None
-        if "album" in track_spotify:
-            # insert_spotify_album() itself logs and returns None for a
-            # malformed/empty album dict (missing "uri" and/or "name"),
-            # so no extra try/except is needed here.
-            album = insert_spotify_album(conn, track_spotify["album"])
+        # Single normalization point for the "album" value: whether the
+        # key is absent, present with value None, present with an
+        # empty dict, or present with some other non-dict type entirely
+        # (e.g. a stray string/list from a malformed API response), treat
+        # them all identically by always handing insert_spotify_album() a
+        # real dict (never None, never a non-dict). This is the only
+        # place track_spotify's "album" entry is read in this function --
+        # do not add a second ad-hoc guard elsewhere for a future
+        # malformed-album shape; fix it here instead.
+        album_data = track_spotify.get("album")
+        if not isinstance(album_data, dict):
+            album_data = {}
+        # insert_spotify_album() itself logs and returns None for a
+        # malformed/empty album dict (missing "uri" and/or "name"), so no
+        # extra try/except is needed here.
+        album = insert_spotify_album(conn, album_data)
         if album is None:
             # Unchanged behavior: no usable album (missing "album" key,
             # or an "album" dict that is empty/malformed) means this

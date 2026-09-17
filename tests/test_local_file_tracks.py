@@ -333,6 +333,53 @@ def test_r5_insert_spotify_song_album_missing_name_does_not_raise(caplog):
     assert "Album Missing Name Track" in caplog.text
 
 
+def test_r5_insert_spotify_song_album_none_value_does_not_raise(caplog):
+    """Round-3 regression: a track whose "album" key is present but holds
+    None (not absent, not {} -- an explicit None value) must not crash
+    insert_spotify_album() with AttributeError('NoneType' object has no
+    attribute 'get'). insert_spotify_song() must normalize this to an
+    empty dict before ever calling insert_spotify_album(), same outcome
+    as the missing-"album"-key and empty-dict cases above."""
+    track_spotify = {
+        "name": "Album None Value Track",
+        "uri": "spotify:local:someone:somealbum:album-none-value:200",
+        "album": None}
+    artist_spotify = {"name": "Some Artist", "uri": "spotify:artist:y"}
+
+    caplog.set_level(logging.WARNING)
+    with database.dbms.db_engine.connect() as conn:
+        result = database.insert_spotify_song(
+            conn, artist_spotify, track_spotify)
+        conn.close()
+
+    assert result is not None
+    assert result["song_uuid"] is None
+    assert "Album None Value Track" in caplog.text
+
+
+def test_r5_insert_spotify_song_album_non_dict_type_does_not_raise(caplog):
+    """Adversarial variant closing out the same neighborhood: "album"
+    present as a non-dict type entirely (a stray string, as a malformed
+    API response might produce) must not crash insert_spotify_album()
+    with AttributeError('str' object has no attribute 'get'). Normalized
+    to an empty dict the same as None/missing/{}."""
+    track_spotify = {
+        "name": "Album Wrong Type Track",
+        "uri": "spotify:local:someone:somealbum:album-wrong-type:200",
+        "album": "not-a-dict"}
+    artist_spotify = {"name": "Some Artist", "uri": "spotify:artist:y"}
+
+    caplog.set_level(logging.WARNING)
+    with database.dbms.db_engine.connect() as conn:
+        result = database.insert_spotify_song(
+            conn, artist_spotify, track_spotify)
+        conn.close()
+
+    assert result is not None
+    assert result["song_uuid"] is None
+    assert "Album Wrong Type Track" in caplog.text
+
+
 def test_r5_insert_song_handles_missing_uri_gracefully_without_crashing():
     """The insert_song() caller must not itself crash now that
     insert_spotify_song() can return None (rather than a dict) -- confirms
