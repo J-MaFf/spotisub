@@ -666,7 +666,7 @@ def match_with_subsonic_track(
         # metadata to compare, regardless of any configuration toggle --
         # this fallback is otherwise unreachable for the ~37% of a typical
         # Subsonic library that has no musicBrainzId tag (see
-        # specs/reliable-track-matching.md).
+        # specs/archive/reliable-track-matching.md).
         if track_name != "" and artist_name != "":
             logging.info(
                 f'({threading.current_thread().ident}) Spotify track {comparison_helper.track["name"]} - {comparison_helper.artist_spotify["name"]} not found via ISRC; searching via string comparison...')

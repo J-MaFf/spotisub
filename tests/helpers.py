@@ -1,5 +1,5 @@
 """Shared test factories and a fake Subsonic client used across the
-reliable-track-matching test suite (see specs/reliable-track-matching.md).
+reliable-track-matching test suite (see specs/archive/reliable-track-matching.md).
 
 Nothing here talks to a real Subsonic/Spotify/MusicBrainz server -- the fake
 client below is an in-memory stand-in for exactly the `libsonic.Connection`
@@ -90,7 +90,7 @@ class NoLinearScanDict(dict):
 
     Used to prove the string-compare fallback matcher looks candidates up by
     key (via generate_compare_array()) instead of scanning the whole
-    Subsonic library per track (specs/reliable-track-matching.md R3).
+    Subsonic library per track (specs/archive/reliable-track-matching.md R3).
     """
 
     def values(self):  # pragma: no cover - only hit on regression

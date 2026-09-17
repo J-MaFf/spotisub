@@ -1,6 +1,6 @@
 """One-time repair for duplicate subsonic_spotify_relation rows.
 
-Background: before the fix in specs/reliable-track-matching.md (R4),
+Background: before the fix in specs/archive/reliable-track-matching.md (R4),
 insert_playlist_relation()/select_playlist_relation() matched an existing row
 by its match *outcome* (subsonic_song_id, subsonic_artist_id) instead of by
 identity (spotify_song_uuid, playlist_info_uuid). A track that matched on one

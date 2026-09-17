@@ -1,5 +1,5 @@
 """Tests for loading a Subsonic cache pickle written by a pre-fix version of
-this app (specs/reliable-track-matching.md C-final).
+this app (specs/archive/reliable-track-matching.md C-final).
 
 spotisub.classes.SubsonicCache was extended from 2 required fields
 (total_song_count, song_mbid_dict) to 3 (adding song_compare_dict). The

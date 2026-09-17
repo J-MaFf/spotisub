@@ -7,7 +7,7 @@ transitively imports spotisub.generator -> spotisub.helpers.spotipy_helper /
 subsonic_helper -> several third-party packages (flask_bootstrap,
 flask_restx, flask_apscheduler, flask_socketio, pygtail, spotdl) that have
 nothing to do with the matching/persistence logic under test here
-(specs/reliable-track-matching.md). Those packages are either
+(specs/archive/reliable-track-matching.md). Those packages are either
 unmaintained/hard to install against a modern Python, or (spotdl) pull in a
 heavy yt-dlp dependency chain purely because
 spotisub.helpers.subsonic_helper imports spotisub.helpers.spotdl_helper

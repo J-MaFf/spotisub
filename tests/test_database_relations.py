@@ -1,7 +1,7 @@
 """Tests for subsonic_spotify_relation identity (R4) and the one-time
 duplicate-row repair path (R6).
 
-See specs/reliable-track-matching.md.
+See specs/archive/reliable-track-matching.md.
 """
 import uuid as uuid_module
 
