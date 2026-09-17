@@ -382,7 +382,7 @@ def has_isrc(track):
 
 def add_missing_values_to_track(sp, track):
     """calls spotify if tracks has missing album or isrc or uri"""
-    if "id" in track and track["id"] is not None:
+    if track.get("id") is not None:
         uri = 'spotify:track:' + track['id']
         if "album" not in track or not has_isrc(track):
             spotify_track = get_spotify_object_from_cache(sp, uri)
@@ -392,7 +392,23 @@ def add_missing_values_to_track(sp, track):
         if "uri" not in track:
             track["uri"] = uri
         return track
-    return None
+
+    # Spotify returns id: null (and is_local: true) for a "local file" the
+    # user manually added to their own Spotify library rather than
+    # something from Spotify's catalog -- there is no catalog id to fetch a
+    # replacement object with, so pass the track through essentially as
+    # given (see specs/local-file-track-matching.md R2). It still needs a
+    # usable uri (Spotify's own spotify:local:... uri, already present on
+    # the track dict thanks to the widened fields request in
+    # generator.get_playlist_tracks()) to be persisted/deduplicated
+    # downstream.
+    if not track.get("uri"):
+        logging.warning(
+            '(%s) Local-file track "%s" has no uri, skipping.',
+            str(threading.current_thread().ident),
+            track.get("name"))
+        return None
+    return track
 
 
 def generate_playlist(playlist_info):
@@ -513,6 +529,20 @@ def write_playlist(sp, playlist_info, results):
                             f'({threading.current_thread().ident}) track was set to None when adding missing values, skipping.')
                         continue
 
+                    artists = track.get("artists") or []
+                    if len(artists) == 0:
+                        # Spotify does not formally guarantee a non-empty
+                        # artists array for a completely untagged local-file
+                        # track -- skip it cleanly rather than letting an
+                        # IndexError crash the whole reimport thread for
+                        # this playlist (specs/local-file-track-matching.md
+                        # R3).
+                        logging.warning(
+                            '(%s) Track %s has no artists listed, skipping.',
+                            str(threading.current_thread().ident),
+                            track.get('name'))
+                        continue
+
                     found = False
                     excluded = False
                     logging.info(
@@ -520,7 +550,7 @@ def write_playlist(sp, playlist_info, results):
                         str(threading.current_thread().ident),
                         track['name'])
                     comparison_helper = ComparisonHelper(
-                        track, track["artists"][0], found, excluded, song_ids, track_helper)
+                        track, artists[0], found, excluded, song_ids, track_helper)
                     comparison_helper = match_with_subsonic_track(
                         comparison_helper,
                         playlist_info,

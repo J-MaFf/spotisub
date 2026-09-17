@@ -287,7 +287,11 @@ def insert_song(playlist_info, subsonic_track,
         if pl_info is not None:
             return_dict = insert_spotify_song(
                 conn, artist_spotify, track_spotify)
-            if return_dict["song_uuid"] is not None:
+            # insert_spotify_song() now returns None for a track dict
+            # missing a uri (specs/local-file-track-matching.md R5) instead
+            # of raising -- treat that exactly like the "no song_uuid"
+            # case below: roll back and report no insert happened.
+            if return_dict is not None and return_dict["song_uuid"] is not None:
                 pl_relation = None
                 if subsonic_track is None:
                     pl_relation = insert_playlist_relation(
@@ -1115,12 +1119,50 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
     return_dict["ignored_pl"] = False
     return_dict["album_ignored"] = False
     return_dict["artist_ignored"] = False
-    song_db = select_spotify_song_by_uri(conn, track_spotify["uri"])
+
+    # A track dict reaching this function is expected to always carry a
+    # uri by now (add_missing_values_to_track() guarantees this for both
+    # catalog and local-file tracks -- see
+    # specs/local-file-track-matching.md R2/R5). Guard the access anyway so
+    # a track that somehow reaches this function without one is logged and
+    # skipped gracefully, instead of raising KeyError and crashing the
+    # caller.
+    uri = track_spotify.get("uri")
+    if not uri:
+        logging.warning(
+            'insert_spotify_song: track "%s" has no uri, skipping.',
+            track_spotify.get("name"))
+        return None
+
+    song_db = select_spotify_song_by_uri(conn, uri)
     song_uuid = None
     if song_db is None:
-        album = None
-        if "album" in track_spotify:
-            album = insert_spotify_album(conn, track_spotify["album"])
+        # Single normalization point for the "album" value: whether the
+        # key is absent, present with value None, present with an
+        # empty dict, or present with some other non-dict type entirely
+        # (e.g. a stray string/list from a malformed API response), treat
+        # them all identically by always handing insert_spotify_album() a
+        # real dict (never None, never a non-dict). This is the only
+        # place track_spotify's "album" entry is read in this function --
+        # do not add a second ad-hoc guard elsewhere for a future
+        # malformed-album shape; fix it here instead.
+        album_data = track_spotify.get("album")
+        if not isinstance(album_data, dict):
+            album_data = {}
+        # insert_spotify_album() itself logs and returns None for a
+        # malformed/empty album dict (missing "uri" and/or "name"), so no
+        # extra try/except is needed here.
+        album = insert_spotify_album(conn, album_data)
+        if album is None:
+            # Unchanged behavior: no usable album (missing "album" key,
+            # or an "album" dict that is empty/malformed) means this
+            # track is never persisted (the insert below never runs and
+            # the caller, insert_song(), rolls back and returns None) --
+            # now with a warning so this silent skip is diagnosable.
+            logging.warning(
+                'insert_spotify_song: track "%s" has no usable album, '
+                'will not be persisted.',
+                track_spotify.get("name"))
         if album is not None:
             return_dict["album_ignored"] = (album.ignored == 1)
             stmt = insert(
@@ -1128,10 +1170,10 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
                 uuid=str(uuid.uuid4().hex),
                 album_uuid=album.uuid,
                 title=track_spotify["name"],
-                spotify_uri=track_spotify["uri"])
+                spotify_uri=uri)
             stmt.compile()
             conn.execute(stmt)
-            song_db = select_spotify_song_by_uri(conn, track_spotify["uri"])
+            song_db = select_spotify_song_by_uri(conn, uri)
             return_dict["song_uuid"] = song_db.uuid
             return_dict["song_ignored"] = False
     elif song_db is not None and song_db.uuid is not None:
@@ -1204,16 +1246,32 @@ def insert_spotify_artist(conn, artist_spotify):
 
 def insert_spotify_album(conn, album_spotify):
     """insert spotify artist"""
-    album = select_spotify_album_by_uri(conn, album_spotify["uri"])
+    # album_spotify can be an empty dict ({}) or a dict missing "name"
+    # and/or "uri" -- e.g. a local-file track's album metadata, which
+    # Spotify may report incompletely (see
+    # specs/local-file-track-matching.md's Context/Out-of-scope section).
+    # Guard both fields with .get() so a malformed album dict is skipped
+    # cleanly (logged, no row inserted) instead of raising KeyError. Per
+    # that spec, we do not invent placeholder name/uri values to force an
+    # insert.
+    uri = album_spotify.get("uri")
+    name = album_spotify.get("name")
+    if not uri or not name:
+        logging.warning(
+            'insert_spotify_album: malformed/empty album %s, skipping.',
+            album_spotify)
+        return None
+
+    album = select_spotify_album_by_uri(conn, uri)
     if album is None:
         stmt = insert(
             dbms.spotify_album).values(
             uuid=str(uuid.uuid4().hex),
-            name=album_spotify["name"],
-            spotify_uri=album_spotify["uri"])
+            name=name,
+            spotify_uri=uri)
         stmt.compile()
         conn.execute(stmt)
-        return select_spotify_album_by_uri(conn, album_spotify["uri"])
+        return select_spotify_album_by_uri(conn, uri)
     return album
 
 

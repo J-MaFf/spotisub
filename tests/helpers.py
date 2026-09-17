@@ -30,6 +30,38 @@ def make_spotify_track(name, artist_name, album_name=None, isrc=None,
     return track
 
 
+def make_local_spotify_track(name, artist_name, album_name=None,
+                             duration_ms=210000, uri=None):
+    """Build a minimal Spotify *local-file* track dict -- one the user
+    manually imported into their own Spotify library rather than something
+    from Spotify's catalog (see specs/local-file-track-matching.md).
+
+    Unlike make_spotify_track(), `id` is always None and `is_local` is
+    always True, matching what Spotify's Web API actually returns for such
+    a track. `uri` defaults to Spotify's own
+    `spotify:local:{artist}:{album}:{title}:{duration}` shape; pass
+    `uri=""` (or any falsy value) to build a track that's missing a usable
+    uri, for exercising the R2 "no uri" skip path.
+    """
+    if uri is None:
+        uri = (f"spotify:local:{artist_name}:{album_name or ''}:"
+               f"{name}:{duration_ms // 1000}")
+    track = {
+        "name": name,
+        "id": None,
+        "is_local": True,
+        "uri": uri,
+        "artists": [{
+            "name": artist_name,
+            "uri": f"spotify:local:artist:{artist_name.lower().replace(' ', '-')}"}],
+    }
+    if album_name is not None:
+        track["album"] = {
+            "name": album_name,
+            "uri": f"spotify:local:album:{album_name.lower().replace(' ', '-')}"}
+    return track
+
+
 def make_subsonic_song(song_id, title, artist, album, artist_id=None,
                        music_brainz_id=None):
     """Build a minimal Subsonic search2 song dict."""
