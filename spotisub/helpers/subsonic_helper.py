@@ -418,6 +418,22 @@ def prune_stale_user_playlists(current_playlist_names):
     `ignored` status has no bearing on this decision: a still-present
     ignored playlist is not pruned, a gone playlist is pruned regardless of
     whether it was ignored.
+
+    Deliberately does NOT trust playlist_info.subsonic_playlist_id to decide
+    whether a live Subsonic playlist needs deleting: insert_playlist_type()'s
+    update branch (used by every daily discovery scan for an
+    already-known playlist) always writes subsonic_playlist_id=None,
+    because the discovery scan's playlist_info dict never carries that
+    field -- so every already-tracked row's subsonic_playlist_id gets wiped
+    back to NULL on every scan_library run, real or not, until its next
+    lucky reimport draw repopulates it. Trusting that field here would skip
+    the Subsonic-side delete for any playlist that hadn't been reimported
+    since the last scan (confirmed live: every currently-tracked row had
+    subsonic_playlist_id=NULL immediately after a scan_library run, despite
+    several of them having real, populated Navidrome playlists). Instead,
+    look the live Subsonic playlist id up fresh by name -- the same
+    lookup-by-name pattern write_playlist() already relies on for this
+    exact reason.
     """
     for pl_info in database.select_playlist_info_by_type(constants.JOB_UP_ID):
         if pl_info.subsonic_playlist_name in current_playlist_names:
@@ -426,12 +442,17 @@ def prune_stale_user_playlists(current_playlist_names):
             '(%s) Pruning playlist "%s": no longer present in your Spotify account',
             str(threading.current_thread().ident),
             pl_info.subsonic_playlist_name)
-        deleted = database.delete_playlist_info_by_uuid(pl_info.uuid)
-        if deleted is not None and deleted.subsonic_playlist_id is not None:
+        database.delete_playlist_info_by_uuid(pl_info.uuid)
+        prefix = os.environ.get(
+            constants.PLAYLIST_PREFIX,
+            constants.PLAYLIST_PREFIX_DEFAULT_VALUE).replace("\"", "")
+        live_subsonic_playlist_id = get_playlist_id_by_name(
+            prefix + pl_info.subsonic_playlist_name)
+        if live_subsonic_playlist_id is not None:
             try:
                 try:
                     check_pysonic_connection().deletePlaylist(
-                        deleted.subsonic_playlist_id)
+                        live_subsonic_playlist_id)
                 except DataNotFoundError:
                     raise  # Don't retry on DataNotFoundError
                 except Exception as e:
