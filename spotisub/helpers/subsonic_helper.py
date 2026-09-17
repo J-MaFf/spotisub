@@ -58,7 +58,7 @@ pysonic = libsonic.Connection(
 
 
 def load_subsonic_cache_from_file() -> SubsonicCache:
-    cache = SubsonicCache(0, {})
+    cache = SubsonicCache(0, {}, {})
     path = os.path.join(constants.CACHE_DIR, constants.SUBSONIC_CACHE_FILENAME)
     if os.path.exists(path):
         if os.stat(path).st_size == 0:
@@ -164,6 +164,7 @@ def build_subsonic_cache() -> SubsonicCache:
     song_offset = 0
     total_song_count = 0
     subsonic_songs_dict = {}
+    subsonic_compare_dict = {}
     try:
         while True:
             logging.debug(
@@ -201,11 +202,23 @@ def build_subsonic_cache() -> SubsonicCache:
             for song in songs_page:
                 if "musicBrainzId" in song:
                     subsonic_songs_dict[song["musicBrainzId"]] = song
+                # Index by every normalized title compare-variant so the
+                # string-compare fallback matcher can look up a small
+                # candidate set instead of scanning the whole library (see
+                # get_subsonic_track_via_string_compare()).
+                title = song.get("title")
+                if title:
+                    for variant in utils.generate_compare_array(title):
+                        subsonic_compare_dict.setdefault(
+                            variant, []).append(song)
     except Exception:
         utils.write_exception()
-        return SubsonicCache(0, {})
+        return SubsonicCache(0, {}, {})
 
-    cache = SubsonicCache(total_song_count, subsonic_songs_dict)
+    cache = SubsonicCache(
+        total_song_count,
+        subsonic_songs_dict,
+        subsonic_compare_dict)
 
     logging.debug(
         f'Found {cache.total_song_count} songs and {len(subsonic_songs_dict)} MBIDs in subsonic library.')
@@ -413,7 +426,7 @@ def write_playlist(sp, playlist_info, results):
                         comparison_helper,
                         playlist_info,
                         old_song_ids,
-                        subsonic_cache.song_mbid_dict)
+                        subsonic_cache)
 
                     track = comparison_helper.track
                     artist_spotify = comparison_helper.artist_spotify
@@ -515,10 +528,63 @@ def get_subsonic_track_via_mbid(
     return matched_track
 
 
+def _find_string_compare_candidates(
+        comparison_helper, subsonic_compare_dict: dict[str, list]) -> list:
+    """Look up candidate Subsonic songs for the string-compare fallback via
+    the title-variant index built by build_subsonic_cache(), instead of
+    scanning every song in the library. Every normalized title variant of
+    the Spotify track (see utils.generate_compare_array) is looked up in the
+    index and the (deduplicated) union of matches is returned; the caller
+    still runs the full compare_track_metadata narrowing (title + artist)
+    over this candidate set."""
+    candidates = []
+    seen_ids = set()
+    track_name = comparison_helper.track.get("name") or ""
+    for variant in utils.generate_compare_array(track_name):
+        for candidate in subsonic_compare_dict.get(variant, []):
+            candidate_id = candidate.get("id")
+            if candidate_id in seen_ids:
+                continue
+            seen_ids.add(candidate_id)
+            candidates.append(candidate)
+    return candidates
+
+
+def _pick_best_string_compare_match(comparison_helper, matched_tracks: list) -> dict:
+    """Disambiguate between multiple equally-valid string-compare matches
+    (e.g. two distinct songs sharing a normalized title+artist because the
+    same track was released on two different albums). Prefers a candidate
+    whose album also loosely matches the Spotify track's album; falls back
+    to the first candidate (previous behavior) when no album information is
+    available or none of the candidates' albums match."""
+    if len(matched_tracks) <= 1:
+        return matched_tracks[0]
+
+    spotify_album = comparison_helper.track.get("album")
+    spotify_album_name = None
+    if isinstance(spotify_album, dict):
+        spotify_album_name = spotify_album.get("name")
+
+    if spotify_album_name:
+        for candidate in matched_tracks:
+            candidate_album = candidate.get("album") or ""
+            if candidate_album and utils.compare_strings(
+                    spotify_album_name, candidate_album):
+                return candidate
+
+    # No usable album info, or none of the candidates' albums matched --
+    # preserve the previous "pick the first one" behavior rather than
+    # erroring or refusing to match.
+    return matched_tracks[0]
+
+
 def get_subsonic_track_via_string_compare(
-        comparison_helper, subsonic_tracks_dict: dict[str, dict]) -> dict | None:
-    matched_tracks = [s_t for s_t in subsonic_tracks_dict.values(
-    ) if utils.compare_track_metadata(comparison_helper, s_t)]
+        comparison_helper, subsonic_compare_dict: dict[str, list]) -> dict | None:
+    candidates = _find_string_compare_candidates(
+        comparison_helper, subsonic_compare_dict)
+
+    matched_tracks = [s_t for s_t in candidates
+                      if utils.compare_track_metadata(comparison_helper, s_t)]
 
     if len(matched_tracks) == 0:
         logging.debug(
@@ -526,8 +592,8 @@ def get_subsonic_track_via_string_compare(
         return
 
     # TODO: add some sort of UI where the user can ensure the proper track is matched if there are multiple possibilities.
-    # for now just pick the first one
-    matched_track = matched_tracks[0]
+    matched_track = _pick_best_string_compare_match(
+        comparison_helper, matched_tracks)
 
     if (
         utils.compare_string_to_exclusion(
@@ -546,20 +612,26 @@ def match_with_subsonic_track(
         comparison_helper: ComparisonHelper,
         playlist_info,
         old_song_ids,
-        subsonic_tracks_dict) -> ComparisonHelper:
+        subsonic_cache: SubsonicCache) -> ComparisonHelper:
     """compare spotify track to subsonic one"""
     matched_track = None
     if has_isrc(comparison_helper.track):
         matched_track = get_subsonic_track_via_mbid(
-            comparison_helper, subsonic_tracks_dict)
+            comparison_helper, subsonic_cache.song_mbid_dict)
 
-    if matched_track is None and os.environ.get(
-            constants.TEXT_COMAPRE_MATCHING_ENABLED,
-            constants.TEXT_COMAPRE_MATCHING_ENABLED_DEFAULT_VALUE) == "1":
-        logging.info(
-            f'({threading.current_thread().ident}) Spotify track {comparison_helper.track["name"]} - {comparison_helper.artist_spotify["name"]} not found via ISRC; searching via string comparison...')
-        matched_track = get_subsonic_track_via_string_compare(
-            comparison_helper, subsonic_tracks_dict)
+    if matched_track is None:
+        track_name = (comparison_helper.track.get("name") or "").strip()
+        artist_name = (comparison_helper.artist_spotify.get("name") or "").strip()
+        # Fall back to string-compare matching whenever there's any usable
+        # metadata to compare, regardless of any configuration toggle --
+        # this fallback is otherwise unreachable for the ~37% of a typical
+        # Subsonic library that has no musicBrainzId tag (see
+        # specs/reliable-track-matching.md).
+        if track_name != "" and artist_name != "":
+            logging.info(
+                f'({threading.current_thread().ident}) Spotify track {comparison_helper.track["name"]} - {comparison_helper.artist_spotify["name"]} not found via ISRC; searching via string comparison...')
+            matched_track = get_subsonic_track_via_string_compare(
+                comparison_helper, subsonic_cache.song_compare_dict)
 
     if matched_track is None:
         return comparison_helper
