@@ -83,8 +83,18 @@ def scan_user_saved_tracks():
     subsonic_helper.generate_playlist(playlist_info)
 
 
-def scan_user_playlists(offset=0):
-    """get list of user playlists"""
+def scan_user_playlists(offset=0, _current_names=None):
+    """get list of user playlists
+
+    Recurses page by page (as before), but now accumulates and returns the
+    complete set of current Spotify playlist names (stripped) once the full
+    paginated fetch completes without raising. If a page fetch raises
+    partway through, the exception propagates and no set is returned --
+    callers must not use a partial/incomplete result for pruning (see
+    specs/prune-stale-user-playlists.md R1/R5).
+    """
+    if _current_names is None:
+        _current_names = set()
     REQUEST_LIMIT = 50
     sp = spotipy_helper.get_spotipy_client()
     playlist_result = sp.current_user_playlists(
@@ -93,16 +103,19 @@ def scan_user_playlists(offset=0):
     for item in playlist_result['items']:
         if item is not None and item['name'] is not None and item['name'].strip(
         ) != '':
+            name = item['name'].strip()
             playlist_info = {}
-            playlist_info["name"] = item['name'].strip()
+            playlist_info["name"] = name
             playlist_info["spotify_uri"] = item["uri"]
             playlist_info["type"] = constants.JOB_UP_ID
             playlist_info["import_arg"] = item['name']
             subsonic_helper.generate_playlist(playlist_info)
+            _current_names.add(name)
 
     if len(playlist_result['items']) != 0:
-        scan_user_playlists(offset=offset + REQUEST_LIMIT)
-    return
+        return scan_user_playlists(
+            offset=offset + REQUEST_LIMIT, _current_names=_current_names)
+    return _current_names
 
 
 def init_artists_top_tracks():
@@ -808,7 +821,9 @@ def scan_library():
         if os.environ.get(constants.ARTIST_PLAYLIST_ENABLED,
                           constants.ARTIST_PLAYLIST_ENABLED_DEFAULT_VALUE) == "1":
             scan_artists_top_tracks()
-        scan_user_playlists()
+        current_user_playlist_names = scan_user_playlists()
+        subsonic_helper.prune_stale_user_playlists(
+            current_user_playlist_names)
     except EOFError:
         logging.error(
             "Spotify auth failed during library scan (non-interactive env). "

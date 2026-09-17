@@ -156,3 +156,37 @@ class FakePysonicClient:
         if key not in self.playlists:
             raise DataNotFoundError("no such playlist: " + str(key))
         del self.playlists[key]
+
+
+class FakeSpotipyClient:
+    """In-memory stand-in for a spotipy.Spotify client, covering exactly the
+    surface generator.scan_user_playlists() calls: paginated
+    current_user_playlists(limit=, offset=) -> {'items': [...]}.
+
+    `pages` is a list of pages, each page a list of item dicts (each with at
+    least a "name" and "uri" key) or None entries (mirroring a null item
+    Spotify can return). `limit` must match the REQUEST_LIMIT
+    scan_user_playlists() calls with (50) -- pages are consumed one per call
+    regardless of the requested limit/offset, purely by call order, which is
+    enough to simulate a multi-page fetch without reimplementing real
+    pagination math.
+
+    If `fail_on_page` is set (1-indexed), the call that would fetch that
+    page raises `raise_with` instead (default a generic Exception), to
+    simulate a mid-fetch failure (spotipy.SpotifyException in production).
+    """
+
+    def __init__(self, pages, fail_on_page=None, raise_with=None):
+        self.pages = list(pages)
+        self.fail_on_page = fail_on_page
+        self.raise_with = raise_with or Exception("simulated Spotify API failure")
+        self._call_count = 0
+
+    def current_user_playlists(self, limit=50, offset=0):
+        self._call_count += 1
+        if self.fail_on_page is not None and self._call_count == self.fail_on_page:
+            raise self.raise_with
+        page_index = self._call_count - 1
+        if page_index >= len(self.pages):
+            return {"items": []}
+        return {"items": list(self.pages[page_index])}

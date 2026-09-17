@@ -405,6 +405,44 @@ def generate_playlist(playlist_info):
     return database.create_playlist(playlist_info)
 
 
+def prune_stale_user_playlists(current_playlist_names):
+    """Delete playlist_info rows of type user_playlists that are no longer
+    present in the user's Spotify account.
+
+    current_playlist_names must be the complete set of current Spotify
+    playlist names returned by a fully successful
+    generator.scan_user_playlists() fetch (see
+    specs/prune-stale-user-playlists.md). Matching is by exact
+    subsonic_playlist_name, the same key insert_playlist_type() uses to
+    resolve "does this playlist already exist" -- not spotify_playlist_uri.
+    `ignored` status has no bearing on this decision: a still-present
+    ignored playlist is not pruned, a gone playlist is pruned regardless of
+    whether it was ignored.
+    """
+    for pl_info in database.select_playlist_info_by_type(constants.JOB_UP_ID):
+        if pl_info.subsonic_playlist_name in current_playlist_names:
+            continue
+        logging.info(
+            '(%s) Pruning playlist "%s": no longer present in your Spotify account',
+            str(threading.current_thread().ident),
+            pl_info.subsonic_playlist_name)
+        deleted = database.delete_playlist_info_by_uuid(pl_info.uuid)
+        if deleted is not None and deleted.subsonic_playlist_id is not None:
+            try:
+                try:
+                    check_pysonic_connection().deletePlaylist(
+                        deleted.subsonic_playlist_id)
+                except DataNotFoundError:
+                    raise  # Don't retry on DataNotFoundError
+                except Exception as e:
+                    logging.debug(
+                        '(%s) Deleting playlist failed',
+                        str(threading.current_thread().ident), str(e))
+                    time.sleep(1)
+            except DataNotFoundError:
+                pass
+
+
 def write_playlist(sp, playlist_info, results):
     """write playlist to subsonic db"""
     try:
