@@ -550,13 +550,24 @@ def get_user_saved_tracks_playlist(result, offset_tracks=0):
         if "track" in track_item:
             track = track_item['track']
             if track is not None:
+                artists = track.get('artists') or []
+                if len(artists) == 0:
+                    # Reachable for a local-file track in Liked Songs --
+                    # Spotify does not formally guarantee a non-empty
+                    # artists array for a completely untagged local file
+                    # (specs/local-file-track-matching.md R3).
+                    logging.warning(
+                        '(%s) Skipping track %s inside your saved tracks '
+                        'because it has no artists listed',
+                        str(threading.current_thread().ident),
+                        track.get('name'))
+                    continue
                 logging.info(
                     '(%s) Found %s - %s inside your saved tracks',
                     str(threading.current_thread().ident),
-                    track['artists'][0]['name'],
+                    artists[0]['name'],
                     track['name'])
-                if track is not None:
-                    result["tracks"].append(track)
+                result["tracks"].append(track)
     time.sleep(2)
     if len(response_tracks['items']) != 0:
         result = get_user_saved_tracks_playlist(
@@ -580,7 +591,8 @@ def get_playlist_tracks(item, result, offset_tracks=0):
     response_tracks = sp.playlist_items(
         item['id'],
         offset=offset_tracks,
-        fields='items.item.id,items.item.name,items.item.artists,items.item.type,total',
+        fields='items.item.id,items.item.name,items.item.artists,items.item.type,'
+        'items.item.uri,items.item.album,items.item.is_local,total',
         limit=50,
         additional_types=['track'])
     for track_item in response_tracks['items']:
@@ -594,10 +606,20 @@ def get_playlist_tracks(item, result, offset_tracks=0):
                 f'({threading.current_thread().ident}) Skipping track {track["name"]} because it is not a song')
             continue
 
+        artists = track.get('artists') or []
+        if len(artists) == 0:
+            # Reachable for a local-file playlist track -- Spotify does not
+            # formally guarantee a non-empty artists array for a completely
+            # untagged local file (specs/local-file-track-matching.md R3).
+            logging.warning(
+                f'({threading.current_thread().ident}) Skipping track {track.get("name")} '
+                f'inside playlist {item["name"]} because it has no artists listed')
+            continue
+
         logging.info(
             '(%s) Found %s - %s inside playlist %s',
             str(threading.current_thread().ident),
-            track['artists'][0]['name'],
+            artists[0]['name'],
             track['name'],
             item['name'])
 

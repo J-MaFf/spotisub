@@ -287,7 +287,11 @@ def insert_song(playlist_info, subsonic_track,
         if pl_info is not None:
             return_dict = insert_spotify_song(
                 conn, artist_spotify, track_spotify)
-            if return_dict["song_uuid"] is not None:
+            # insert_spotify_song() now returns None for a track dict
+            # missing a uri (specs/local-file-track-matching.md R5) instead
+            # of raising -- treat that exactly like the "no song_uuid"
+            # case below: roll back and report no insert happened.
+            if return_dict is not None and return_dict["song_uuid"] is not None:
                 pl_relation = None
                 if subsonic_track is None:
                     pl_relation = insert_playlist_relation(
@@ -1115,12 +1119,36 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
     return_dict["ignored_pl"] = False
     return_dict["album_ignored"] = False
     return_dict["artist_ignored"] = False
-    song_db = select_spotify_song_by_uri(conn, track_spotify["uri"])
+
+    # A track dict reaching this function is expected to always carry a
+    # uri by now (add_missing_values_to_track() guarantees this for both
+    # catalog and local-file tracks -- see
+    # specs/local-file-track-matching.md R2/R5). Guard the access anyway so
+    # a track that somehow reaches this function without one is logged and
+    # skipped gracefully, instead of raising KeyError and crashing the
+    # caller.
+    uri = track_spotify.get("uri")
+    if not uri:
+        logging.warning(
+            'insert_spotify_song: track "%s" has no uri, skipping.',
+            track_spotify.get("name"))
+        return None
+
+    song_db = select_spotify_song_by_uri(conn, uri)
     song_uuid = None
     if song_db is None:
         album = None
         if "album" in track_spotify:
             album = insert_spotify_album(conn, track_spotify["album"])
+        else:
+            # Unchanged behavior: no album means this track is never
+            # persisted (album stays None below, so the insert never runs
+            # and the caller, insert_song(), rolls back and returns None)
+            # -- now with a warning so this silent skip is diagnosable.
+            logging.warning(
+                'insert_spotify_song: track "%s" has no album, will not '
+                'be persisted.',
+                track_spotify.get("name"))
         if album is not None:
             return_dict["album_ignored"] = (album.ignored == 1)
             stmt = insert(
@@ -1128,10 +1156,10 @@ def insert_spotify_song(conn, artist_spotify, track_spotify):
                 uuid=str(uuid.uuid4().hex),
                 album_uuid=album.uuid,
                 title=track_spotify["name"],
-                spotify_uri=track_spotify["uri"])
+                spotify_uri=uri)
             stmt.compile()
             conn.execute(stmt)
-            song_db = select_spotify_song_by_uri(conn, track_spotify["uri"])
+            song_db = select_spotify_song_by_uri(conn, uri)
             return_dict["song_uuid"] = song_db.uuid
             return_dict["song_ignored"] = False
     elif song_db is not None and song_db.uuid is not None:
