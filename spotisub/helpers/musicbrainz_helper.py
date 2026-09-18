@@ -53,7 +53,8 @@ def get_mbids_from_isrc(isrc: str) -> list:
                 logging.warning(
                     f'Transient error contacting MusicBrainz for ISRC: {isrc} '
                     f'(attempt {attempt}/{MAX_ATTEMPTS}). Retrying...')
-                time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+                backoff_index = min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)
+                time.sleep(RETRY_BACKOFF_SECONDS[backoff_index])
                 continue
             utils.write_exception()
             return []
