@@ -122,6 +122,15 @@ spotify_cache = None
 # there.
 subsonic_cache = None
 
+# Unix time before which each kind of Spotify lookup ("track", "album",
+# "artist", "playlist") is skipped, set from the Retry-After of a 429.
+# Spotify answers a dev-mode app's exhausted /v1/tracks quota with a
+# Retry-After of up to 24 h; without this, every queued lookup would ask
+# again.
+spotify_lookup_blocked_until = {}
+# How long to skip lookups when a 429 carries no Retry-After.
+DEFAULT_LOOKUP_BLOCK_SECONDS = 3600
+
 
 def save_cache_object_to_file(obj, filename: str):
     path = os.path.join(constants.CACHE_DIR, filename)
@@ -129,13 +138,45 @@ def save_cache_object_to_file(obj, filename: str):
         pickle.dump(obj, f)
 
 
+def spotify_uri_kind(spotify_uri):
+    """track, album, artist or playlist, as load_spotify_object_to_cache
+    tells them apart"""
+    for kind in ("track", "album", "artist", "playlist"):
+        if kind in spotify_uri:
+            return kind
+    return None
+
+
+def is_spotify_lookup_blocked(spotify_uri):
+    return time.time() < spotify_lookup_blocked_until.get(
+        spotify_uri_kind(spotify_uri), 0)
+
+
+def block_spotify_lookups(spotify_uri, exception):
+    """Skip this kind of lookup until the 429's Retry-After has passed"""
+    kind = spotify_uri_kind(spotify_uri)
+    try:
+        seconds = int(float((exception.headers or {}).get("Retry-After")))
+    except (TypeError, ValueError):
+        seconds = DEFAULT_LOOKUP_BLOCK_SECONDS
+    spotify_lookup_blocked_until[kind] = time.time() + seconds
+    logging.warning(
+        "Spotify answered a %s lookup with 429 (Retry-After: %s s); "
+        "skipping %s lookups until %s",
+        kind,
+        seconds,
+        kind,
+        time.strftime("%Y-%m-%d %H:%M:%S",
+                      time.localtime(spotify_lookup_blocked_until[kind])))
+
+
 def get_spotify_object_from_cache(sp, spotify_uri, force=False):
     if not force and spotify_uri in spotify_cache:
         return spotify_cache[spotify_uri]
     elif force:
         load_spotify_object_to_cache(sp, spotify_uri)
-        return spotify_cache[spotify_uri]
-    else:
+        return spotify_cache.get(spotify_uri)
+    elif not is_spotify_lookup_blocked(spotify_uri):
         cache_executor.submit(load_spotify_object_to_cache, sp, spotify_uri)
     return None
 
@@ -144,6 +185,9 @@ def load_spotify_object_to_cache(sp, spotify_uri):
     try:
         global spotify_cache
         if spotify_uri in spotify_cache:
+            return
+        # Lookups queued before a 429 blocked them are dropped here.
+        if is_spotify_lookup_blocked(spotify_uri):
             return
         spotify_object = None
         if "track" in spotify_uri:
@@ -158,9 +202,11 @@ def load_spotify_object_to_cache(sp, spotify_uri):
             spotify_cache[spotify_uri] = spotify_object
             save_cache_object_to_file(
                 spotify_cache, constants.SPOTIFY_OBJECT_CACHE_FILENAME)
-    except SpotifyException:
-        utils.write_exception()
-        pass
+    except SpotifyException as e:
+        if e.http_status == 429:
+            block_spotify_lookups(spotify_uri, e)
+        else:
+            utils.write_exception()
 
 
 def is_subsonic_cache_stale() -> bool:
@@ -1278,7 +1324,7 @@ def set_ignore(type, uuid, value):
 def download_song(spotipy_helper, uri):
     sp = spotipy_helper.get_spotipy_client()
     track = get_spotify_object_from_cache(sp, uri, force=True)
-    if "external_urls" in track and track["external_urls"] is not None and "spotify" in track[
+    if track is not None and "external_urls" in track and track["external_urls"] is not None and "spotify" in track[
             "external_urls"] and track["external_urls"]["spotify"] is not None:
         spotdl_executor.submit(
             spotdl_helper.download_track,

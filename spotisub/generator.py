@@ -601,11 +601,16 @@ def get_artist(name):
 def get_playlist_tracks(item, result, offset_tracks=0):
     """get playlist tracks"""
     sp = spotipy_helper.get_spotipy_client()
+    # items.item.external_ids carries the ISRC. Without it every track fails
+    # has_isrc(), and add_missing_values_to_track() fetches it again with
+    # GET /v1/tracks/{id}, one call per track, which uses up the dev-mode
+    # app's daily /v1/tracks quota within a minute of it resetting.
     response_tracks = sp.playlist_items(
         item['id'],
         offset=offset_tracks,
         fields='items.item.id,items.item.name,items.item.artists,items.item.type,'
-        'items.item.uri,items.item.album,items.item.is_local,total',
+        'items.item.uri,items.item.album,items.item.external_ids,'
+        'items.item.is_local,total',
         limit=50,
         additional_types=['track'])
     for track_item in response_tracks['items']:
