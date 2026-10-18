@@ -1,14 +1,72 @@
 """Spotipy helper"""
 import os
 import logging
+import requests
 import spotipy
+import urllib3
 from spotipy import SpotifyOAuth
+from spotipy.util import Retry as SpotipyRetry
 from spotisub import spotisub
 from spotisub import constants
 from spotisub.exceptions import SpotifyApiException
 
 
 SP = None
+
+# The longest Retry-After, in seconds, that a 429 is waited out for inside
+# the request. Without a bound urllib3 sleeps out the whole Retry-After (up
+# to Retry.DEFAULT_RETRY_AFTER_MAX, 6 h) and then re-sends the request with
+# the Authorization header it was first built with, which has expired by
+# then. Spotify answers a dev-mode app's exhausted /v1/tracks quota with a
+# Retry-After of up to 24 h, so the cache thread slept 6 h at a time and
+# woke to a 401 "Missing/invalid/expired access token". 30 s still covers
+# Spotify's ordinary rolling 30-second rate limit.
+MAX_RETRY_AFTER_SECONDS = 30
+
+
+class BoundedRetry(SpotipyRetry):
+    """spotipy's Retry, except that a 429 whose Retry-After is longer than
+    MAX_RETRY_AFTER_SECONDS is handed straight back instead of slept on."""
+
+    def increment(self, method=None, url=None, response=None, error=None,
+                  _pool=None, _stacktrace=None):
+        if response is not None and self._retry_after_too_long(response):
+            raise urllib3.exceptions.MaxRetryError(
+                _pool, url, urllib3.exceptions.ResponseError(
+                    "Retry-After of " + str(response.headers.get("Retry-After"))
+                    + " s is too long to wait out"))
+        return super().increment(method, url, response=response, error=error,
+                                 _pool=_pool, _stacktrace=_stacktrace)
+
+    def _retry_after_too_long(self, response):
+        try:
+            retry_after = self.get_retry_after(response)
+        except urllib3.exceptions.InvalidHeader:
+            return False
+        return retry_after is not None and retry_after > MAX_RETRY_AFTER_SECONDS
+
+
+def build_requests_session():
+    """The session spotipy would build for itself (same retry counts,
+    methods, backoff and status codes), with BoundedRetry in place of
+    spotipy's Retry. raise_on_status=False makes urllib3 return the last
+    response once it stops retrying, so spotipy raises a SpotifyException
+    that carries the real status and headers (Retry-After included) rather
+    than a bare 429 "Max Retries"."""
+    retry = BoundedRetry(
+        total=spotipy.Spotify.max_retries,
+        connect=None,
+        read=False,
+        allowed_methods=frozenset(['GET', 'POST', 'PUT', 'DELETE']),
+        status=spotipy.Spotify.max_retries,
+        backoff_factor=0.3,
+        status_forcelist=spotipy.Spotify.default_retry_codes,
+        raise_on_status=False)
+    adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
 
 
 def get_secrets():
@@ -60,7 +118,9 @@ def create_sp_client():
             cache_path=cache_path,
             requests_timeout=10)
 
-        return spotipy.Spotify(auth_manager=creds)
+        return spotipy.Spotify(
+            auth_manager=creds,
+            requests_session=build_requests_session())
     except EOFError as e:
         logging.error(
             "Failed to authenticate with Spotify in non-interactive environment. "
