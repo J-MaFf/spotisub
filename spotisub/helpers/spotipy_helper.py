@@ -25,8 +25,9 @@ MAX_RETRY_AFTER_SECONDS = 30
 
 
 class BoundedRetry(SpotipyRetry):
-    """spotipy's Retry, except that a 429 whose Retry-After is longer than
-    MAX_RETRY_AFTER_SECONDS is handed straight back instead of slept on."""
+    """spotipy's Retry, except that a retryable response (in practice a 429,
+    or a 503) whose Retry-After is longer than MAX_RETRY_AFTER_SECONDS is
+    handed straight back instead of slept on."""
 
     def increment(self, method=None, url=None, response=None, error=None,
                   _pool=None, _stacktrace=None):
