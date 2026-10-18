@@ -1271,7 +1271,7 @@ def set_ignore(type, uuid, value):
             except SubsonicOfflineException:
                 logging.error(
                     '(%s) Could not delete the Subsonic copy of ignored playlist %s, '
-                    'the next library scan will retry',
+                    'its next import or the daily library scan will retry',
                     str(threading.current_thread().ident), uuid)
 
 
