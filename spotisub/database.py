@@ -1823,5 +1823,18 @@ def update_ignored_playlist(uuid, value):
         conn.close()
 
 
+def clear_playlist_subsonic_id(uuid):
+    with dbms.db_engine.connect() as conn:
+        stmt = update(
+            dbms.playlist_info).where(
+            dbms.playlist_info.c.uuid == uuid).values(
+            subsonic_playlist_id=None)
+
+        stmt.compile()
+        conn.execute(stmt)
+        conn.commit()
+        conn.close()
+
+
 dbms = Database(SQLITE, dbname=Config.SQLALCHEMY_DATABASE_NAME)
 create_db_tables()

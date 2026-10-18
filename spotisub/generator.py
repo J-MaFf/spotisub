@@ -223,25 +223,34 @@ def init_user_playlists():
     """Init Playlists"""
     if os.environ.get(constants.PLAYLIST_GEN_SCHED,
                       constants.PLAYLIST_GEN_SCHED_DEFAULT_VALUE) != "0":
-        playlist_infos = database.select_playlist_info_by_type(
+        playlist_info = pick_user_playlist()
+        if playlist_info is not None and playlist_info.uuid is not None:
+            old_job = scheduler.get_job(constants.JOB_UP_ID)
+            if old_job is None:
+                scheduler.add_job(
+                    func=get_user_playlists,
+                    trigger="interval",
+                    args=[
+                        playlist_info.uuid],
+                    hours=int(
+                        os.environ.get(
+                            constants.PLAYLIST_GEN_SCHED,
+                            constants.PLAYLIST_GEN_SCHED_DEFAULT_VALUE)),
+                    id=constants.JOB_UP_ID,
+                    replace_existing=True,
+                    max_instances=1)
+
+
+def pick_user_playlist():
+    """Pick the next user playlist to import at random, leaving out ignored
+    ones so they don't use up a scheduler slot."""
+    playlist_infos = [
+        playlist_info for playlist_info in database.select_playlist_info_by_type(
             constants.JOB_UP_ID)
-        if len(playlist_infos) > 0:
-            playlist_info = random.choice(playlist_infos)
-            if playlist_info is not None and playlist_info.uuid is not None:
-                old_job = scheduler.get_job(constants.JOB_UP_ID)
-                if old_job is None:
-                    scheduler.add_job(
-                        func=get_user_playlists,
-                        trigger="interval",
-                        args=[
-                            playlist_info.uuid],
-                        hours=int(
-                            os.environ.get(
-                                constants.PLAYLIST_GEN_SCHED,
-                                constants.PLAYLIST_GEN_SCHED_DEFAULT_VALUE)),
-                        id=constants.JOB_UP_ID,
-                        replace_existing=True,
-                        max_instances=1)
+        if not subsonic_helper.is_ignored_playlist(playlist_info)]
+    if len(playlist_infos) == 0:
+        return None
+    return random.choice(playlist_infos)
 
 
 def artist_top_tracks(uuid):
@@ -488,7 +497,13 @@ def get_user_playlists(uuid):
 def get_user_playlists_run(uuid, offset=0):
     """get user playlists"""
     playlist_info_db = database.select_playlist_info_by_uuid(uuid)
-    if playlist_info_db is not None and playlist_info_db.uuid is not None:
+    if subsonic_helper.is_ignored_playlist(playlist_info_db):
+        logging.info(
+            '(%s) Skipping playlist %s because it was marked as ignored',
+            str(threading.current_thread().ident),
+            playlist_info_db.subsonic_playlist_name)
+        subsonic_helper.remove_ignored_playlist(playlist_info_db)
+    elif playlist_info_db is not None and playlist_info_db.uuid is not None:
 
         sp = spotipy_helper.get_spotipy_client()
 
@@ -524,13 +539,11 @@ def get_user_playlists_run(uuid, offset=0):
         if scheduler.get_job(id=constants.JOB_UP_ID) is not None:
             scheduler.remove_job(id=constants.JOB_UP_ID)
     else:
-        playlist_infos = database.select_playlist_info_by_type(
-            constants.JOB_UP_ID)
-        if len(playlist_infos) > 0 and os.environ.get(
+        playlist_info = pick_user_playlist()
+        if playlist_info is not None and os.environ.get(
                 constants.PLAYLIST_GEN_SCHED,
                 constants.PLAYLIST_GEN_SCHED_DEFAULT_VALUE) != "0" and scheduler.get_job(
                 id=constants.JOB_UP_ID) is not None:
-            playlist_info = random.choice(playlist_infos)
             scheduler.modify_job(
                 args=[playlist_info.uuid],
                 id=constants.JOB_UP_ID
@@ -846,6 +859,7 @@ def scan_library():
         current_user_playlist_names = scan_user_playlists()
         subsonic_helper.prune_stale_user_playlists(
             current_user_playlist_names)
+        subsonic_helper.remove_ignored_playlists()
     except EOFError:
         logging.error(
             "Spotify auth failed during library scan (non-interactive env). "

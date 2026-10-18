@@ -459,30 +459,88 @@ def prune_stale_user_playlists(current_playlist_names):
             str(threading.current_thread().ident),
             pl_info.subsonic_playlist_name)
         database.delete_playlist_info_by_uuid(pl_info.uuid)
-        prefix = os.environ.get(
-            constants.PLAYLIST_PREFIX,
-            constants.PLAYLIST_PREFIX_DEFAULT_VALUE).replace("\"", "")
-        live_subsonic_playlist_id = get_playlist_id_by_name(
-            prefix + pl_info.subsonic_playlist_name)
-        if live_subsonic_playlist_id is not None:
-            try:
-                try:
-                    check_pysonic_connection().deletePlaylist(
-                        live_subsonic_playlist_id)
-                except DataNotFoundError:
-                    raise  # Don't retry on DataNotFoundError
-                except Exception as e:
-                    logging.debug(
-                        '(%s) Deleting playlist failed',
-                        str(threading.current_thread().ident), str(e))
-                    time.sleep(1)
-            except DataNotFoundError:
-                pass
+        delete_subsonic_playlist_by_name(
+            get_subsonic_playlist_name(pl_info.subsonic_playlist_name))
+
+
+def get_subsonic_playlist_name(playlist_name):
+    """name Spotisub gives playlist_name's playlist in Subsonic"""
+    prefix = os.environ.get(
+        constants.PLAYLIST_PREFIX,
+        constants.PLAYLIST_PREFIX_DEFAULT_VALUE).replace("\"", "")
+    return prefix + playlist_name
+
+
+def delete_subsonic_playlist_by_name(subsonic_playlist_name):
+    """Delete the live Subsonic playlist with this name, if there is one.
+
+    Looks the id up by name, never from playlist_info.subsonic_playlist_id,
+    which goes stale (see prune_stale_user_playlists()). Returns True when a
+    playlist was found.
+    """
+    live_subsonic_playlist_id = get_playlist_id_by_name(subsonic_playlist_name)
+    if live_subsonic_playlist_id is None:
+        return False
+    try:
+        try:
+            check_pysonic_connection().deletePlaylist(
+                live_subsonic_playlist_id)
+        except DataNotFoundError:
+            raise  # Don't retry on DataNotFoundError
+        except Exception as e:
+            logging.debug(
+                '(%s) Deleting playlist failed',
+                str(threading.current_thread().ident), str(e))
+            time.sleep(1)
+    except DataNotFoundError:
+        pass
+    return True
+
+
+def is_ignored_playlist(pl_info):
+    """true if this playlist_info row is marked as ignored"""
+    return pl_info is not None and pl_info.ignored == 1
+
+
+def remove_ignored_playlist(pl_info):
+    """Delete the Subsonic copy of a playlist marked as ignored.
+
+    Clears the row's subsonic_playlist_id first. Otherwise
+    remove_subsonic_deleted_playlist() would see that Subsonic playlist
+    missing and delete the whole playlist_info row, ignored flag included,
+    and the next library scan would add the playlist back as not ignored.
+    """
+    if pl_info is None or pl_info.subsonic_playlist_name is None:
+        return
+    database.clear_playlist_subsonic_id(pl_info.uuid)
+    if delete_subsonic_playlist_by_name(
+            get_subsonic_playlist_name(pl_info.subsonic_playlist_name)):
+        logging.info(
+            '(%s) Deleted the Subsonic copy of ignored playlist %s',
+            str(threading.current_thread().ident),
+            pl_info.subsonic_playlist_name)
+
+
+def remove_ignored_playlists():
+    """remove the Subsonic copy of every ignored user playlist"""
+    for pl_info in database.select_playlist_info_by_type(constants.JOB_UP_ID):
+        if is_ignored_playlist(pl_info):
+            remove_ignored_playlist(pl_info)
 
 
 def write_playlist(sp, playlist_info, results):
     """write playlist to subsonic db"""
     try:
+        if "uuid" in playlist_info:
+            pl_info_db = database.select_playlist_info_by_uuid(
+                playlist_info["uuid"])
+            if is_ignored_playlist(pl_info_db):
+                logging.warning(
+                    '(%s) Skipping playlist %s because it was marked as ignored',
+                    str(threading.current_thread().ident),
+                    playlist_info["name"])
+                remove_ignored_playlist(pl_info_db)
+                return
         playlist_info["prefix"] = os.environ.get(
             constants.PLAYLIST_PREFIX,
             constants.PLAYLIST_PREFIX_DEFAULT_VALUE)
@@ -1206,6 +1264,15 @@ def set_ignore(type, uuid, value):
         database.update_ignored_song_pl(uuid, value)
     elif type == 'playlist':
         database.update_ignored_playlist(uuid, value)
+        if value == 1:
+            try:
+                remove_ignored_playlist(
+                    database.select_playlist_info_by_uuid(uuid))
+            except SubsonicOfflineException:
+                logging.error(
+                    '(%s) Could not delete the Subsonic copy of ignored playlist %s, '
+                    'the next library scan will retry',
+                    str(threading.current_thread().ident), uuid)
 
 
 def download_song(spotipy_helper, uri):
