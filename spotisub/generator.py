@@ -9,6 +9,7 @@ import math
 import threading
 from datetime import datetime
 from datetime import timedelta
+import requests
 import spotipy
 from flask_apscheduler import APScheduler
 from spotisub import spotisub
@@ -471,9 +472,17 @@ def get_user_saved_tracks_run(uuid):
         playlist_info["type"] = constants.JOB_ST_ID
         playlist_info["import_arg"] = ""
         sp = spotipy_helper.get_spotipy_client()
-        result = dict({'tracks': []})
-        result = get_user_saved_tracks_playlist(result)
-        subsonic_helper.write_playlist(sp, playlist_info, result)
+        try:
+            result = get_user_saved_tracks_playlist(dict({'tracks': []}))
+        except (spotipy.SpotifyException,
+                requests.exceptions.RequestException) as e:
+            # Writing a partial list would drop the unfetched tracks from
+            # the Navidrome playlist, so leave it as it is until next run.
+            logging.warning(
+                '(%s) Skipping your saved tracks this run, a Spotify call '
+                'failed: %s', str(threading.current_thread().ident), e)
+        else:
+            subsonic_helper.write_playlist(sp, playlist_info, result)
 
     if os.environ.get(constants.SAVED_GEN_SCHED,
                       constants.SAVED_GEN_SCHED_DEFAULT_VALUE) == "0":
@@ -507,8 +516,17 @@ def get_user_playlists_run(uuid, offset=0):
 
         sp = spotipy_helper.get_spotipy_client()
 
-        playlist_result = sp.current_user_playlists(
-            limit=50, offset=offset)
+        try:
+            playlist_result = sp.current_user_playlists(
+                limit=50, offset=offset)
+        except (spotipy.SpotifyException,
+                requests.exceptions.RequestException) as e:
+            # Stop paging, but still fall through to picking the next
+            # playlist below, or the next run imports this one again.
+            logging.warning(
+                '(%s) Could not list your playlists (offset %s): %s',
+                str(threading.current_thread().ident), offset, e)
+            playlist_result = {'items': []}
 
         for item in playlist_result['items']:
             if item['name'] is not None and item['name'].strip() != '' and (playlist_info_db.import_arg is None or (
@@ -526,7 +544,8 @@ def get_user_playlists_run(uuid, offset=0):
                     result = dict({'tracks': []})
                     result = get_playlist_tracks(item, result)
                     subsonic_helper.write_playlist(sp, playlist_info, result)
-                except spotipy.SpotifyException as e:
+                except (spotipy.SpotifyException,
+                        requests.exceptions.RequestException) as e:
                     logging.warning(
                         '(%s) Skipping playlist %s: %s', str(
                             threading.current_thread().ident), item['name'], e)

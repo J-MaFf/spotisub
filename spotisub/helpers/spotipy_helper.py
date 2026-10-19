@@ -53,11 +53,17 @@ def build_requests_session():
     spotipy's Retry. raise_on_status=False makes urllib3 return the last
     response once it stops retrying, so spotipy raises a SpotifyException
     that carries the real status and headers (Retry-After included) rather
-    than a bare 429 "Max Retries"."""
+    than a bare 429 "Max Retries".
+
+    Unlike spotipy, read timeouts are retried too. spotipy leaves them off
+    (read=False), so one slow response raised requests' ReadTimeout and
+    killed the saved_tracks and user_playlists job threads. That is safe
+    here because Spotisub only ever reads from api.spotify.com; the token
+    refresh goes through SpotifyOAuth's own session, not this one."""
     retry = BoundedRetry(
         total=spotipy.Spotify.max_retries,
         connect=None,
-        read=False,
+        read=spotipy.Spotify.max_retries,
         allowed_methods=frozenset(['GET', 'POST', 'PUT', 'DELETE']),
         status=spotipy.Spotify.max_retries,
         backoff_factor=0.3,
@@ -119,9 +125,12 @@ def create_sp_client():
             cache_path=cache_path,
             requests_timeout=10)
 
+        # Same 10 s read budget as the OAuth refresh above; spotipy's
+        # default is 5 s.
         return spotipy.Spotify(
             auth_manager=creds,
-            requests_session=build_requests_session())
+            requests_session=build_requests_session(),
+            requests_timeout=10)
     except EOFError as e:
         logging.error(
             "Failed to authenticate with Spotify in non-interactive environment. "
