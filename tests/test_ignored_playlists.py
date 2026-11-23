@@ -2,6 +2,7 @@
 Spotify fetch or Subsonic write, ignoring one deletes its Subsonic copy, and
 the ignored flag survives that copy being gone.
 """
+from spotisub import constants
 from spotisub import database
 from spotisub import generator
 from spotisub.helpers import spotipy_helper
@@ -33,10 +34,12 @@ def _fake_client(monkeypatch):
 
 
 def _live_copy(fake_client, name):
-    """Create a Subsonic playlist named like Spotisub's copy of `name` and
+    """Create a Subsonic playlist named like Spotisub's copy of `name`,
+    marked as managed the way Spotisub marks the playlists it creates, and
     return its id."""
-    fake_client.createPlaylist(name="Spotisub - " + name, songIds=["song-1"])
-    return max(fake_client.playlists.keys(), key=int)
+    return fake_client.add_playlist(
+        "Spotisub - " + name, song_ids=["song-1"],
+        comment=constants.MANAGED_PLAYLIST_MARKER)
 
 
 def _playlist_names(fake_client):

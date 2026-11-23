@@ -5,6 +5,7 @@ See specs/prune-stale-user-playlists.md.
 """
 import pytest
 
+from spotisub import constants
 from spotisub import database
 from spotisub import generator
 from spotisub.helpers import spotipy_helper
@@ -178,9 +179,9 @@ def test_prune_stale_user_playlists_three_row_scenario(monkeypatch, caplog):
         conn.close()
 
     # Row 3: absent from Spotify, has a real Subsonic playlist too.
-    fake_client.createPlaylist(
-        name="Spotisub - Absent Real Playlist", songIds=[])
-    (real_subsonic_id,) = fake_client.playlists.keys()
+    real_subsonic_id = fake_client.add_playlist(
+        "Spotisub - Absent Real Playlist",
+        comment=constants.MANAGED_PLAYLIST_MARKER)
     absent_real_row = _seed_playlist(
         "Absent Real Playlist", subsonic_playlist_id=real_subsonic_id)
     with database.dbms.db_engine.connect() as conn:
@@ -225,9 +226,9 @@ def test_prune_stale_user_playlists_ignores_stale_null_subsonic_id(monkeypatch):
         subsonic_helper, "check_pysonic_connection", lambda: fake_client)
 
     # A real Subsonic/Navidrome playlist exists under the prefixed name...
-    fake_client.createPlaylist(
-        name="Spotisub - Stale Id Playlist", songIds=["song-x"])
-    (real_subsonic_id,) = fake_client.playlists.keys()
+    real_subsonic_id = fake_client.add_playlist(
+        "Spotisub - Stale Id Playlist", song_ids=["song-x"],
+        comment=constants.MANAGED_PLAYLIST_MARKER)
 
     # ...but the playlist_info row's stored subsonic_playlist_id is NULL,
     # exactly as insert_playlist_type()'s update branch leaves it after any

@@ -395,9 +395,24 @@ def get_subsonic_search_results(text_to_search):
     return result
 
 
-def get_playlist_id_by_name(playlist_name):
-    """get playlist id by name"""
-    playlist_id = None
+def is_managed_playlist(playlist):
+    """True iff this Subsonic playlist dict is one Spotisub owns.
+
+    The single test of ownership: the playlist's Subsonic `comment` contains
+    constants.MANAGED_PLAYLIST_MARKER. Spotisub only ever rewrites or deletes
+    a playlist that passes this test, so a hand-made playlist that happens to
+    share a name with a Spotify playlist is never adopted, rewritten or
+    deleted.
+    """
+    if not isinstance(playlist, dict):
+        return False
+    comment = playlist.get("comment")
+    return isinstance(comment, str) and \
+        constants.MANAGED_PLAYLIST_MARKER in comment
+
+
+def get_subsonic_playlists():
+    """Every playlist getPlaylists() returns, always as a list of dicts."""
     playlists_search = check_pysonic_connection().getPlaylists()
     if "playlists" in playlists_search and len(
             playlists_search["playlists"]) > 0:
@@ -410,10 +425,110 @@ def get_playlist_id_by_name(playlist_name):
             # list.
             if isinstance(playlists_page, dict):
                 playlists_page = [playlists_page]
-            for playlist in playlists_page:
-                if playlist["name"].strip() == playlist_name.strip():
-                    playlist_id = playlist["id"]
-                    break
+            return playlists_page
+    return []
+
+
+def get_playlists_by_name(playlist_name):
+    """Every Subsonic playlist whose name is playlist_name (managed or not)."""
+    return [playlist for playlist in get_subsonic_playlists()
+            if playlist["name"].strip() == playlist_name.strip()]
+
+
+def get_playlist_id_by_name(playlist_name):
+    """Id of the *managed* Subsonic playlist named playlist_name, or None.
+
+    Unmanaged playlists (see is_managed_playlist()) are never returned, so
+    every caller that writes to or deletes the playlist it gets back only
+    ever touches a playlist Spotisub created.
+    """
+    for playlist in get_playlists_by_name(playlist_name):
+        if is_managed_playlist(playlist):
+            return playlist["id"]
+    return None
+
+
+def has_unmanaged_playlist_named(playlist_name):
+    """True if a Subsonic playlist named playlist_name exists that Spotisub
+    does not manage."""
+    return any(not is_managed_playlist(playlist)
+               for playlist in get_playlists_by_name(playlist_name))
+
+
+def is_managed_playlist_id(playlist_id):
+    """Re-read one playlist by id and check it is still managed.
+
+    Used right before a destructive call on an id looked up earlier, in case
+    the marker was removed from its comment in the meantime.
+    """
+    try:
+        playlist_search = check_pysonic_connection().getPlaylist(playlist_id)
+    except DataNotFoundError:
+        return False
+    if playlist_search is None:
+        return False
+    return is_managed_playlist(playlist_search.get("playlist"))
+
+
+def warn_unmanaged_playlist(subsonic_playlist_name):
+    """Log the one WARNING for a Spotify playlist whose Subsonic name is
+    already taken by a playlist Spotisub does not manage."""
+    logging.warning(
+        '(%s) Skipping playlist "%s": a Subsonic playlist with that name '
+        'exists but is not managed by Spotisub (its comment lacks "%s"), '
+        'so it is left untouched',
+        str(threading.current_thread().ident),
+        subsonic_playlist_name,
+        constants.MANAGED_PLAYLIST_MARKER)
+
+
+def create_managed_playlist(subsonic_playlist_name):
+    """Create an empty Subsonic playlist and mark it as managed.
+
+    py-sonic's createPlaylist() can't set a comment, so the marker is added
+    with updatePlaylist() straight after creation, before any song is
+    written. Returns the new playlist's id, or None if it could not be
+    created and marked (in which case no song is ever written to it).
+    """
+    created = None
+    try:
+        created = check_pysonic_connection().createPlaylist(
+            name=subsonic_playlist_name, songIds=[])
+        logging.info(
+            '(%s) Creating playlist %s',
+            str(threading.current_thread().ident), subsonic_playlist_name)
+    except SubsonicOfflineException:
+        raise
+    except Exception as e:
+        logging.debug(
+            '(%s) Playlist creation failed: %s',
+            str(threading.current_thread().ident), str(e))
+    playlist_id = None
+    # Subsonic API 1.14+ servers (Navidrome included) return the new
+    # playlist; older ones return nothing, so fall back to the one unmanaged
+    # playlist with this name -- write_playlist() only gets here after
+    # checking that no playlist with this name existed.
+    if isinstance(created, dict) and isinstance(created.get("playlist"), dict):
+        playlist_id = created["playlist"].get("id")
+    if playlist_id is None:
+        for playlist in get_playlists_by_name(subsonic_playlist_name):
+            if not is_managed_playlist(playlist):
+                playlist_id = playlist["id"]
+                break
+    if playlist_id is None:
+        return None
+    try:
+        check_pysonic_connection().updatePlaylist(
+            playlist_id, comment=constants.MANAGED_PLAYLIST_MARKER)
+    except SubsonicOfflineException:
+        raise
+    except Exception as e:
+        logging.error(
+            '(%s) Created playlist %s but could not mark it as managed '
+            '(%s); leaving it empty and untouched',
+            str(threading.current_thread().ident),
+            subsonic_playlist_name, str(e))
+        return None
     return playlist_id
 
 
@@ -523,11 +638,20 @@ def delete_subsonic_playlist_by_name(subsonic_playlist_name):
     """Delete the live Subsonic playlist with this name, if there is one.
 
     Looks the id up by name, never from playlist_info.subsonic_playlist_id,
-    which goes stale (see prune_stale_user_playlists()). Returns True when a
-    playlist was found.
+    which goes stale (see prune_stale_user_playlists()). Only a managed
+    playlist (see is_managed_playlist()) is ever deleted: an unmanaged one
+    with the same name is left alone. Returns True when a managed playlist
+    was found.
     """
     live_subsonic_playlist_id = get_playlist_id_by_name(subsonic_playlist_name)
     if live_subsonic_playlist_id is None:
+        if has_unmanaged_playlist_named(subsonic_playlist_name):
+            logging.warning(
+                '(%s) Not deleting Subsonic playlist "%s": it is not '
+                'managed by Spotisub (its comment lacks "%s")',
+                str(threading.current_thread().ident),
+                subsonic_playlist_name,
+                constants.MANAGED_PLAYLIST_MARKER)
         return False
     try:
         try:
@@ -592,25 +716,20 @@ def write_playlist(sp, playlist_info, results):
         playlist_info["prefix"] = os.environ.get(
             constants.PLAYLIST_PREFIX,
             constants.PLAYLIST_PREFIX_DEFAULT_VALUE)
-        playlist_id = get_playlist_id_by_name(
-            playlist_info["prefix"].replace("\"", "") + playlist_info["name"])
+        subsonic_playlist_name = playlist_info["prefix"].replace(
+            "\"", "") + playlist_info["name"]
+        # Managed playlists only (see is_managed_playlist()).
+        playlist_id = get_playlist_id_by_name(subsonic_playlist_name)
         song_ids = []
         old_song_ids = []
         if playlist_id is None:
-            try:
-                check_pysonic_connection().createPlaylist(
-                    name=playlist_info["prefix"].replace(
-                        "\"", "") + playlist_info["name"], songIds=[])
-                logging.info(
-                    '(%s) Creating playlist %s', str(
-                        threading.current_thread().ident), playlist_info["name"])
-            except Exception as e:
-                logging.debug(
-                    '(%s) Playlist creation failed',
-                    str(threading.current_thread().ident), str(e))
-            playlist_id = get_playlist_id_by_name(
-                playlist_info["prefix"].replace(
-                    "\"", "") + playlist_info["name"])
+            if has_unmanaged_playlist_named(subsonic_playlist_name):
+                # A playlist Spotisub didn't create already has this name:
+                # never adopt, rewrite or delete it, and don't create a
+                # same-name duplicate next to it either.
+                warn_unmanaged_playlist(subsonic_playlist_name)
+                return
+            playlist_id = create_managed_playlist(subsonic_playlist_name)
             database.delete_playlist_relation_by_id(playlist_id)
         else:
             old_song_ids = get_playlist_songs_ids_by_id(playlist_id)
@@ -723,6 +842,13 @@ def write_playlist(sp, playlist_info, results):
                         logging.debug(
                             '(%s) Adding songs to playlist failed',
                             str(threading.current_thread().ident), str(e))
+                elif not is_managed_playlist_id(
+                        playlist_info["subsonic_playlist_id"]):
+                    # The id came from a managed lookup, but the import can
+                    # run for minutes: if the marker was removed from the
+                    # comment meanwhile, the playlist is no longer ours to
+                    # delete.
+                    warn_unmanaged_playlist(subsonic_playlist_name)
                 elif len(song_ids) == 0:
                     try:
                         try:

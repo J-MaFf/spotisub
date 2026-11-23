@@ -69,6 +69,15 @@ JOB_UP_ID = 'user_playlists'
 JOB_ST_ID = 'saved_tracks'
 
 
+# Playlist ownership: Spotisub writes this into the Subsonic comment of every
+# playlist it creates, and only ever rewrites or deletes a playlist whose
+# comment contains it (see subsonic_helper.is_managed_playlist()). A
+# hand-made playlist that happens to share a name is never touched, and
+# deleting the marker from a playlist's comment takes it out of Spotisub's
+# hands.
+MANAGED_PLAYLIST_MARKER = "spotisub:managed"
+
+
 # Cache constants
 CACHE_DIR = os.path.join(os.path.abspath(os.curdir), 'cache')
 SPOTIFY_OBJECT_CACHE_FILENAME = 'spotify_object_cache.pkl'
