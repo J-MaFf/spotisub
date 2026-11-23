@@ -1,10 +1,10 @@
 """Test-only stand-in for flask_apscheduler. spotisub/generator.py builds a
 module-level APScheduler() and calls .add_job()/.start() unconditionally at
-import time to wire up the periodic playlist-generation jobs (ARTIST_GEN_SCHED
-etc.) -- explicitly out of scope for specs/archive/reliable-track-matching.md. This
-no-op stand-in lets generator.py (and therefore spotisub.database /
-spotisub.helpers.subsonic_helper, which import through it) import cleanly
-without a real scheduler ticking away in the test process."""
+import time to wire up the periodic playlist-generation jobs, which is
+unrelated to the logic under test. This no-op stand-in lets generator.py
+(and therefore spotisub.database / spotisub.helpers.subsonic_helper, which
+import through it) import cleanly without a real scheduler ticking away in
+the test process."""
 
 
 class APScheduler:

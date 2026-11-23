@@ -136,13 +136,25 @@ class FakePysonicClient:
     """In-memory stand-in for libsonic.Connection, covering exactly the
     surface spotisub.helpers.subsonic_helper calls: ping, search2 (paged),
     getPlaylists, createPlaylist (both "new, empty" and "replace contents"
-    forms), getPlaylist, deletePlaylist.
+    forms), updatePlaylist (name/comment), getPlaylist, deletePlaylist.
+
+    Every playlist-mutating call is appended to `calls` as
+    (method_name, playlist_id, kwargs) so tests can assert on call order.
+    A playlist's `comment` is only reported by getPlaylists()/getPlaylist()
+    when one is set, like Navidrome, which omits the field when empty.
+
+    `return_created_playlist=True` makes createPlaylist() answer with the
+    new playlist, as Subsonic API 1.14+ servers (Navidrome) do; the default
+    returns nothing, as older servers do.
     """
 
-    def __init__(self, songs=None):
+    def __init__(self, songs=None, return_created_playlist=False):
         self.songs = list(songs or [])
-        self.playlists = {}  # id -> {"name": str, "entry": [{"id": ...}, ...]}
+        # id -> {"name": str, "entry": [{"id": ...}, ...], "comment": str?}
+        self.playlists = {}
         self._next_playlist_id = 1
+        self.return_created_playlist = return_created_playlist
+        self.calls = []
 
     def ping(self):
         return True
@@ -155,12 +167,29 @@ class FakePysonicClient:
             return {"searchResult2": {}}
         return {"searchResult2": {"song": page}}
 
+    def _summary(self, pid):
+        data = self.playlists[pid]
+        summary = {"id": pid, "name": data["name"]}
+        if data.get("comment"):
+            summary["comment"] = data["comment"]
+        return summary
+
+    def add_playlist(self, name, song_ids=(), comment=None):
+        """Seed a playlist directly (not recorded in `calls`) and return its
+        id. Pass comment=constants.MANAGED_PLAYLIST_MARKER for one Spotisub
+        created, or leave it None for a hand-made one."""
+        new_id = str(self._next_playlist_id)
+        self._next_playlist_id += 1
+        self.playlists[new_id] = {
+            "name": name, "entry": [{"id": sid} for sid in song_ids]}
+        if comment is not None:
+            self.playlists[new_id]["comment"] = comment
+        return new_id
+
     def getPlaylists(self):
         if not self.playlists:
             return {"playlists": {}}
-        playlist_list = [
-            {"id": pid, "name": data["name"]}
-            for pid, data in self.playlists.items()]
+        playlist_list = [self._summary(pid) for pid in self.playlists]
         return {"playlists": {"playlist": playlist_list}}
 
     def createPlaylist(self, name=None, playlistId=None, songIds=None):
@@ -171,20 +200,45 @@ class FakePysonicClient:
             self.playlists[new_id] = {
                 "name": name,
                 "entry": [{"id": sid} for sid in song_ids]}
+            self.calls.append(
+                ("createPlaylist", new_id, {"name": name, "songIds": list(song_ids)}))
+            if self.return_created_playlist:
+                return {"playlist": self._summary(new_id)}
             return {}
+        self.calls.append(
+            ("createPlaylist", playlistId, {"songIds": list(song_ids)}))
         if playlistId not in self.playlists:
             self.playlists[playlistId] = {"name": name or "", "entry": []}
         self.playlists[playlistId]["entry"] = [
             {"id": sid} for sid in song_ids]
         return {}
 
+    def updatePlaylist(self, lid, name=None, comment=None, songIdsToAdd=None,
+                       songIndexesToRemove=None):
+        kwargs = {}
+        if name is not None:
+            kwargs["name"] = name
+        if comment is not None:
+            kwargs["comment"] = comment
+        self.calls.append(("updatePlaylist", lid, kwargs))
+        if lid not in self.playlists:
+            raise DataNotFoundError("no such playlist: " + str(lid))
+        if name is not None:
+            self.playlists[lid]["name"] = name
+        if comment is not None:
+            self.playlists[lid]["comment"] = comment
+        return {}
+
     def getPlaylist(self, key):
         if key not in self.playlists:
             raise DataNotFoundError("no such playlist: " + str(key))
         data = self.playlists[key]
-        return {"playlist": {"name": data["name"], "entry": list(data["entry"])}}
+        playlist = self._summary(key)
+        playlist["entry"] = list(data["entry"])
+        return {"playlist": playlist}
 
     def deletePlaylist(self, key):
+        self.calls.append(("deletePlaylist", key, {}))
         if key not in self.playlists:
             raise DataNotFoundError("no such playlist: " + str(key))
         del self.playlists[key]

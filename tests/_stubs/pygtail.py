@@ -1,5 +1,6 @@
 """Test-only stand-in for pygtail, used by spotisub/routes.py to tail the
-application log file for the UI (unrelated to matching/persistence)."""
+application log file for the UI (unrelated to the logic this suite
+exercises)."""
 
 
 class Pygtail:

@@ -69,23 +69,38 @@ JOB_UP_ID = 'user_playlists'
 JOB_ST_ID = 'saved_tracks'
 
 
+# Playlist ownership: Spotisub writes this into the Subsonic comment of every
+# playlist it creates, and only ever rewrites or deletes a playlist whose
+# comment contains it (see subsonic_helper.is_managed_playlist()). A
+# hand-made playlist that happens to share a name is never touched, and
+# deleting the marker from a playlist's comment takes it out of Spotisub's
+# hands.
+MANAGED_PLAYLIST_MARKER = "spotisub:managed"
+
+
 # Cache constants
 CACHE_DIR = os.path.join(os.path.abspath(os.curdir), 'cache')
 SPOTIFY_OBJECT_CACHE_FILENAME = 'spotify_object_cache.pkl'
 SUBSONIC_CACHE_FILENAME = 'subsonic_cache.pkl'
 
 
+def get_subsonic_port():
+    """
+    Return `SUBSONIC_API_PORT` as `int`. If not set or empty,
+    infer `443` for https hosts and `80` for http hosts based
+    on the `SUBSONIC_API_HOSTS` variable.
+    """
+    port_str = os.environ.get(SUBSONIC_API_PORT, "").strip()
+    if port_str:
+        return int(port_str)
+    host = os.environ.get(SUBSONIC_API_HOST, "")
+    return 443 if host.startswith("https://") else 80
+
+
 def get_subsonic_rest_url():
     """Get the full Subsonic REST API URL"""
     host = os.environ.get(SUBSONIC_API_HOST, "")
-    port = os.environ.get(SUBSONIC_API_PORT, "4040")
+    port = get_subsonic_port()
     base_url = os.environ.get(SUBSONIC_API_BASE_URL, SUBSONIC_API_BASE_URL_DEFAULT_VALUE)
-    
-    # Build the REST API path
-    rest_path = "/rest"
-    if base_url:
-        rest_path = f"{base_url}/rest"
-    
-    # Construct the full URL
-    full_url = f"{host}:{port}{rest_path}"
-    return full_url
+    rest_path = f"{base_url}/rest" if base_url else "/rest"
+    return f"{host}:{port}{rest_path}"
