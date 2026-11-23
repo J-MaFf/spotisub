@@ -1,7 +1,7 @@
 """Test-only stand-in for flask_socketio, used by spotisub/routes.py for the
-live-progress websocket UI (unrelated to matching/persistence). Just enough
-surface for routes.py to import and decorate its handlers at module load
-time."""
+live-progress websocket UI (unrelated to the logic this suite exercises).
+Just enough surface for routes.py to import and decorate its handlers at
+module load time."""
 
 
 def emit(*args, **kwargs):

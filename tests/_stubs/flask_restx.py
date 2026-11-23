@@ -1,6 +1,6 @@
 """Test-only stand-in for flask_restx, used by spotisub/routes.py to define
-the /api/v1 REST endpoints (unrelated to the matching/persistence logic this
-suite exercises). Just enough surface for routes.py to import and define its
+the /api/v1 REST endpoints (unrelated to the logic this suite exercises).
+Just enough surface for routes.py to import and define its
 Api/Namespace/Resource classes at module load time without registering real
 routes."""
 

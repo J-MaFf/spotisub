@@ -6,8 +6,7 @@ which unconditionally builds the whole Flask app, registers routes.py, and
 transitively imports spotisub.generator -> spotisub.helpers.spotipy_helper /
 subsonic_helper -> several third-party packages (flask_bootstrap,
 flask_restx, flask_apscheduler, flask_socketio, pygtail, spotdl) that have
-nothing to do with the matching/persistence logic under test here
-(specs/archive/reliable-track-matching.md). Those packages are either
+nothing to do with the logic under test. Those packages are either
 unmaintained/hard to install against a modern Python, or (spotdl) pull in a
 heavy yt-dlp dependency chain purely because
 spotisub.helpers.subsonic_helper imports spotisub.helpers.spotdl_helper
@@ -17,10 +16,9 @@ time regardless of whether SPOTDL_ENABLED is set.
 To keep this suite runnable without installing that unrelated stack, and
 without touching any real network service, tests/_stubs/ provides minimal
 stand-ins for exactly those modules (see each stub file for what it's for
-and why it's safe to fake). Everything this spec actually touches --
-spotisub.database, spotisub.classes, spotisub.constants, spotisub.utils,
-spotisub.helpers.subsonic_helper -- is imported and exercised for real; only
-their unrelated import-time dependencies are faked out.
+and why it's safe to fake). Everything a given test actually touches is
+imported and exercised for real; only the unrelated import-time
+dependencies listed above are faked out.
 """
 import os
 import sys
